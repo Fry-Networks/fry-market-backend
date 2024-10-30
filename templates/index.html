@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Generator</title>
+    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            padding: 0;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        .form-group button {
+            padding: 10px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .form-group button:hover {
+            background-color: #0056b3;
+        }
+        #results {
+            margin-top: 20px;
+        }
+        .image-container {
+            margin-bottom: 15px;
+        }
+        .image-container img {
+            max-width: 100%;
+            height: auto;
+        }
+        .metadata {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Image Generator NFT</h1>
+        <div class="form-group">
+            <label for="num_images">Number of Images:</label>
+            <input type="number" id="num_images" min="1" value="1">
+        </div>
+        <div class="form-group">
+            <label for="prompt">Prompt:</label>
+            <textarea id="prompt" rows="4">A lighthouse on a cliff</textarea>
+        </div>
+        <div class="form-group">
+            <label for="style">Style:</label>
+            <input type="text" id="style" placeholder="e.g., watercolor, abstract">
+        </div>
+        <div class="form-group">
+            <button id="generateButton">Generate Images</button>
+        </div>
+        <div id="results"></div>
+    </div>
+    
+    <script>
+        // Connect to Socket.IO server
+        const socket = io();
+
+        document.getElementById('generateButton').addEventListener('click', () => {
+            const numImages = parseInt(document.getElementById('num_images').value, 10);
+            const prompt = document.getElementById('prompt').value;
+            const style = document.getElementById('style').value;
+
+            // Emit event to server
+            socket.emit('generate-images', { num_images: numImages, prompt: prompt, style: style });
+        });
+
+        // Listen for response from server
+        socket.on('response', (data) => {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+
+            if (data.error) {
+                resultsDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
+                return;
+            }
+
+            data.image_responses.forEach((response) => {
+                const imageContainer = document.createElement('div');
+                imageContainer.className = 'image-container';
+
+                const img = document.createElement('img');
+                img.src = response.image_url;
+                imageContainer.appendChild(img);
+
+                const metadataLink = document.createElement('a');
+                metadataLink.href = response.metadata_url;
+                metadataLink.textContent = 'View Metadata';
+                metadataLink.target = '_blank';
+                imageContainer.appendChild(metadataLink);
+
+                resultsDiv.appendChild(imageContainer);
+            });
+        });
+    </script>
+</body>
+</html>

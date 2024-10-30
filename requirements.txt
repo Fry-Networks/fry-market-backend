@@ -1,0 +1,11 @@
+Flask
+requests
+boto3
+openai
+python-dotenv
+gunicorn
+flask-cors
+pymongo
+web3
+PyJWT
+Flask-SocketIO
