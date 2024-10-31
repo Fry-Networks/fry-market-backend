@@ -18,7 +18,7 @@ jobs:
       - name: Checkout code using SSH
         uses: actions/checkout@v4
         with:
-          repository: Octaloop-Technologies/fry-network-python
+          repository: Fry-Foundation/fry-market-backend 
           # ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
           persist-credentials: false
           clean: true
