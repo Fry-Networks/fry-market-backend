@@ -8,7 +8,7 @@ on:
 jobs:
   setup:
     runs-on: ubuntu-latest
-    environment: main
+
     steps:
       # - name: Set up SSH key
       #   uses: webfactory/ssh-agent@v0.6.0
@@ -36,7 +36,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    environment: main
+ 
     needs: setup
     steps:
       - name: Run tests
@@ -50,7 +50,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    environment: main
+   
     needs: test
     steps:
       - name: Deploy to Server
@@ -115,7 +115,7 @@ jobs:
 
   nginx-config:
     runs-on: ubuntu-latest
-    environment: main
+  
     needs: deploy
     steps:
       - name: Configure and Restart Nginx
@@ -127,7 +127,7 @@ jobs:
 
   notify:
     runs-on: ubuntu-latest
-    environment: main
+
     needs: nginx-config
     if: success()
     steps:
