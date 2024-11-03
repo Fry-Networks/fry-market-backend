@@ -80,7 +80,7 @@ jobs:
             git config --global --add safe.directory "$TARGET_DIR"
 
             # Pull the latest code using SSH from GitHub
-            git pull git@github.com:Octaloop-Technologies/fry-network-python.git main
+            git@github.com:Fry-Foundation/fry-market-backend.git main
 
 
             # Create or activate virtual environment
