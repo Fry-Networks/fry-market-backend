@@ -52,65 +52,64 @@ jobs:
     steps:
       - name: Deploy to Server
         env:
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
-          HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
-          TARGET_DIR: '/root/production_Env/fry-network-python'
-        run: |
-          # Ensure .ssh directory exists and add your server's host key to known_hosts
-          mkdir -p ~/.ssh
-          ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+        SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
+        HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
+        TARGET_DIR: '/root/production_Env/fry-network-python'
+      run: |
+        # Ensure .ssh directory exists and add your server's host key to known_hosts
+        mkdir -p ~/.ssh
+        ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
+        ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+        
+        # SSH to the server and execute deployment steps
+        sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
+          set -e
+          echo "Deploying to production"
           
-          # SSH to the server and execute deployment steps
-          sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
-            set -e
-            echo "Deploying to production"
-            
-            # Check if the target directory exists and is a Git repository
-            if [ ! -d "$TARGET_DIR/.git" ]; then
-              echo "Directory is empty or not a Git repository. Cloning repository..."
-              rm -rf "$TARGET_DIR"
-              mkdir -p "$TARGET_DIR"
-              git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
-            else
-              echo "Repository exists. Fetching latest changes..."
-              cd "$TARGET_DIR"
-              git remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
-              git fetch origin main
-              git reset --hard origin/main
-            fi
-            
-            # Verify the pulled files
-            echo "Listing files in $TARGET_DIR after pulling code:"
-            cd "$TARGET_DIR"
-            ls -la
-            
-            # Create or activate virtual environment
-            if [ ! -d "myenv" ]; then
-              python3.11 -m venv myenv
-            fi
-            source myenv/bin/activate
-            
-            # Install the latest requirements file
-            if [ -f "requirements.txt" ]; then
-              echo "Using requirements file: requirements.txt"
-              pip install --upgrade pip
-              pip install -r "requirements.txt"
-            else
-              echo "No requirements file found"
-              exit 1
-            fi
-            
-            # Clean pip cache
-            pip cache purge
-            
-            # Restart the service
-            sudo systemctl daemon-reload
-            sudo systemctl restart fry-foundation-production.service 
-            sudo systemctl status fry-foundation-production.service 
-          EOF
-        shell: bash
+          # Ensure the target directory exists and is a Git repository
+          if [ ! -d "$TARGET_DIR/.git" ]; then
+            echo "Directory is empty or not a Git repository. Cloning repository..."
+            rm -rf "$TARGET_DIR"
+            mkdir -p "$TARGET_DIR"
+            git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
+          else
+            echo "Repository exists. Fetching latest changes..."
+            git -C "$TARGET_DIR" remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
+            git -C "$TARGET_DIR" fetch origin main
+            git -C "$TARGET_DIR" reset --hard origin/main
+          fi
+
+          # Verify the pulled files
+          echo "Listing files in $TARGET_DIR after pulling code:"
+          ls -la "$TARGET_DIR"
+
+          # Create or activate virtual environment directly in the target directory
+          if [ ! -d "$TARGET_DIR/myenv" ]; then
+            echo "Creating virtual environment"
+            python3.11 -m venv "$TARGET_DIR/myenv"
+          fi
+          source "$TARGET_DIR/myenv/bin/activate"
+          
+          # Install dependencies from requirements.txt if available
+          if [ -f "$TARGET_DIR/requirements.txt" ]; then
+            echo "Using requirements file: requirements.txt"
+            pip install --upgrade pip
+            pip install -r "$TARGET_DIR/requirements.txt"
+          else
+            echo "No requirements file found"
+            exit 1
+          fi
+          
+          # Clean pip cache
+          pip cache purge
+          
+          # Restart the service
+          sudo systemctl daemon-reload
+          sudo systemctl restart fry-foundation-production.service 
+          sudo systemctl status fry-foundation-production.service 
+        EOF
+      shell: bash
 
   nginx-config:
     runs-on: ubuntu-latest
