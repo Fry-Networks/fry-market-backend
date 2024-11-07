@@ -24,16 +24,21 @@ jobs:
       # Step 3: Deploy to Production Server
       - name: Deploy to Production Server
         env:
-          TARGET_DIR: "/root/production_Env/fry-market-backend"  # Change to your target directory
+          TARGET_DIR: "/root/production_Env/fry-network-python"  # Corrected target directory
         run: |
           ssh -o StrictHostKeyChecking=no root@${{ secrets.PRODUCTION_HOST_IP }} <<EOF
             set -e
             echo "Starting deployment on production server"
 
-            # Navigate to the target directory
+            # Navigate to the target directory or create it if it doesn't exist
+            if [ ! -d "$TARGET_DIR" ]; then
+              echo "Directory $TARGET_DIR does not exist. Creating it..."
+              mkdir -p "$TARGET_DIR"
+            fi
             cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
 
             # Pull the latest code from the repository
+            git config --global --add safe.directory "$TARGET_DIR"
             git pull origin main || { echo "Git pull failed"; exit 1; }
 
             # Ensure virtual environment exists and activate it
@@ -48,7 +53,7 @@ jobs:
               pip install --upgrade pip
               pip install -r requirements.txt
             else
-              echo "No requirements.txt file found"; exit 1;
+              echo "No requirements.txt file found"; exit 1
             fi
 
             # Clean up pip cache
@@ -57,14 +62,14 @@ jobs:
             # Restart the application service
             sudo systemctl daemon-reload
             sudo systemctl restart fry-foundation-production.service
-            sudo systemctl status fry-foundation-production.service
+            sudo systemctl status fry-foundation-production.service -l || true
           EOF
 
-      # Step 4: Verify Nginx Configuration (Optional)
-      - name: Verify Nginx Configuration
+      # Step 4: Verify and Restart Nginx (Optional)
+      - name: Verify and Restart Nginx
         run: |
           ssh -o StrictHostKeyChecking=no root@${{ secrets.PRODUCTION_HOST_IP }} <<EOF
             sudo nginx -t
-            sudo systemctl status nginx || true
             sudo systemctl restart nginx
+            sudo systemctl status nginx -l || true
           EOF
