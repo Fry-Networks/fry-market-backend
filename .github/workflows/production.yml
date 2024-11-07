@@ -67,29 +67,34 @@ jobs:
           set -e
           echo "Deploying to production"
           cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
-          
-          # Set the correct Git remote URL to use SSH
+
+          # Set the Git remote URL to use SSH if not already set
           git remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
           
-          # Force reset local repository to match the remote main branch
+          # Pull the latest code from the repository
+          echo "Fetching latest code from GitHub..."
           git fetch origin main
           git reset --hard origin/main
           
-            # Create or activate virtual environment
-            if [ ! -d "myenv" ]; then
-              python3.11 -m venv myenv
-            fi
-            source myenv/bin/activate
-            
-            # Install the latest requirements file
-            if [ -f "requirements.txt" ]; then
-              echo "Using requirements file: requirements.txt"
-              pip install --upgrade pip
-              pip install -r "requirements.txt"
-            else
-              echo "No requirements file found"
-              exit 1
-            fi
+          # Verify the pulled files
+          echo "Listing files in $TARGET_DIR after pulling code:"
+          ls -la
+          
+          # Create or activate virtual environment
+          if [ ! -d "myenv" ]; then
+            python3.11 -m venv myenv
+          fi
+          source myenv/bin/activate
+          
+          # Install the latest requirements file
+          if [ -f "requirements.txt" ]; then
+            echo "Using requirements file: requirements.txt"
+            pip install --upgrade pip
+            pip install -r "requirements.txt"
+          else
+            echo "No requirements file found"
+            exit 1
+          fi
             
             # Clean pip cache
             pip cache purge
