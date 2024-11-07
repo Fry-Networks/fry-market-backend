@@ -47,6 +47,9 @@ jobs:
               git remote set-url origin $GIT_REPO_SSH_URL
             fi
 
+            # Set pull strategy to merge to handle divergent branches
+            git config pull.rebase false
+
             # Pull the latest code from the repository
             git pull origin main || { echo "Git pull failed"; exit 1; }
 
