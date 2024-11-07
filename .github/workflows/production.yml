@@ -51,33 +51,39 @@ jobs:
     needs: test
     steps:
       - name: Deploy to Server
-        env:
-          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
-          SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
-          HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
-          TARGET_DIR: '/root/production_Env/fry-network-python'
-        run: |
-          # Ensure .ssh directory exists and add your server's host key to known_hosts
-          mkdir -p ~/.ssh
-          ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
-          
-          # SSH to the server and execute deployment steps
-          sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
+      env:
+        SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+        SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
+        HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
+        TARGET_DIR: '/root/production_Env/fry-network-python'
+      run: |
+        # Ensure .ssh directory exists and add your server's host key to known_hosts
+        mkdir -p ~/.ssh
+        ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
+        ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+        
+        # SSH to the server and execute deployment steps
+        sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
           set -e
           echo "Deploying to production"
-          cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
-
-          # Set the Git remote URL to use SSH if not already set
-          git remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
           
-          # Pull the latest code from the repository
-          echo "Fetching latest code from GitHub..."
-          git fetch origin main
-          git reset --hard origin/main
+          # Check if the target directory exists and is a Git repository
+          if [ ! -d "$TARGET_DIR/.git" ]; then
+            echo "Directory is empty or not a Git repository. Cloning repository..."
+            rm -rf "$TARGET_DIR"
+            mkdir -p "$TARGET_DIR"
+            git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
+          else
+            echo "Repository exists. Fetching latest changes..."
+            cd "$TARGET_DIR"
+            git remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
+            git fetch origin main
+            git reset --hard origin/main
+          fi
           
           # Verify the pulled files
           echo "Listing files in $TARGET_DIR after pulling code:"
+          cd "$TARGET_DIR"
           ls -la
           
           # Create or activate virtual environment
@@ -95,16 +101,16 @@ jobs:
             echo "No requirements file found"
             exit 1
           fi
-            
-            # Clean pip cache
-            pip cache purge
-            
-            # Restart the service
-            sudo systemctl daemon-reload
-            sudo systemctl restart fry-foundation-production.service 
-            sudo systemctl status fry-foundation-production.service 
-          EOF
-        shell: bash
+          
+          # Clean pip cache
+          pip cache purge
+          
+          # Restart the service
+          sudo systemctl daemon-reload
+          sudo systemctl restart fry-foundation-production.service 
+          sudo systemctl status fry-foundation-production.service 
+        EOF
+      shell: bash
 
   nginx-config:
     runs-on: ubuntu-latest
