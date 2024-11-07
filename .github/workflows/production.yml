@@ -72,13 +72,10 @@ jobs:
             ls -la
             # Configure Git to treat this directory as safe
             git config --global --add safe.directory "$TARGET_DIR"
-            
-            # Configure Git pull strategy
-            git config --local user.email "fry.samuel@fryscryptoexcursions.com"
-            git config --local user.name "Fry-Foundation"
-            git config --local pull.rebase false
-            git reset --hard HEAD
-            git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
+          
+            # Force reset local repository to match the remote main branch
+            git fetch origin main
+            git reset --hard origin/main
             
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
