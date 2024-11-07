@@ -76,6 +76,8 @@ jobs:
             git config --global --add safe.directory "$TARGET_DIR"
             # Pull the latest code using SSH from GitHub
             # Pull the latest code using SSH from GitHub with the --allow-unrelated-histories flag
+            git config --local user.email "ci-deploy@fry-foundation.org"
+            git config --local user.name "CI Deploy"
             git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
 
             # Create or activate virtual environment
