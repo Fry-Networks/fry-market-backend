@@ -78,14 +78,14 @@ jobs:
             cd "/root/production_Env/fry-network-python" || exit 1
             
             # Force pull the latest code to avoid merge conflicts
-            git reset --hard  # Discard any local changes
-            git pull origin main --allow-unrelated-histories
+            # git reset --hard  # Discard any local changes
+            # git pull origin main --allow-unrelated-histories
             # Pull the latest code using SSH from GitHub
             # Pull the latest code using SSH from GitHub with the --allow-unrelated-histories flag
-            # git config --local user.email "ci-deploy@fry-foundation.org"
-            # git config --local user.name "CI Deploy"
-            # git reset --hard HEAD
-            # git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
+            git config --local user.email "fry.samuel@fryscryptoexcursions.com"
+            git config --local user.name "Fry-Foundation"
+            git reset --hard HEAD
+            git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
 
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
