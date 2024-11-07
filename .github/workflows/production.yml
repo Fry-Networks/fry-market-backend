@@ -68,12 +68,13 @@ jobs:
           echo "Deploying to production"
           cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
           
-          # Set the correct Git remote URL
-          git remote set-url origin https://github.com/Fry-Foundation/fry-market-backend.git
+          # Set the correct Git remote URL to use SSH
+          git remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
           
           # Force reset local repository to match the remote main branch
           git fetch origin main
           git reset --hard origin/main
+          
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
