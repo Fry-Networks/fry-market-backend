@@ -1,4 +1,3 @@
-
 name: Deploy fry-foundation to Production server
 
 on:
@@ -9,7 +8,6 @@ on:
 jobs:
   setup:
     runs-on: ubuntu-latest
-   
     steps:
       # - name: Set up SSH key
       #   uses: webfactory/ssh-agent@v0.6.0
@@ -29,13 +27,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y sshpass
+          
       - name: Create .ssh directory and add GitHub.com to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+
   test:
     runs-on: ubuntu-latest
-   
     needs: setup
     steps:
       - name: Run tests
@@ -46,9 +45,9 @@ jobs:
           else
             echo "No test cases file found"
           fi
+
   deploy:
     runs-on: ubuntu-latest
-    
     needs: test
     steps:
       - name: Deploy to Server
@@ -61,41 +60,32 @@ jobs:
           # Ensure .ssh directory exists and add your server's host key to known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
-          # Add GitHub's SSH key to known_hosts to avoid host verification failures
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
           
           # SSH to the server and execute deployment steps
           sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
             set -e
-            echo "Deploying to staging"
+            echo "Deploying to production"
             cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
             # Debug: List files in the target directory
             echo "Listing files in $TARGET_DIR:"
             ls -la
             # Configure Git to treat this directory as safe
             git config --global --add safe.directory "$TARGET_DIR"
-            echo "Deploying to production"
-            cd "/root/production_Env/fry-network-python" || exit 1
             
-            # Force pull the latest code to avoid merge conflicts
-            # git reset --hard  # Discard any local changes
-            # git pull origin main --allow-unrelated-histories
-            # Pull the latest code using SSH from GitHub
-            # Pull the latest code using SSH from GitHub with the --allow-unrelated-histories flag
+            # Configure Git pull strategy
             git config --local user.email "fry.samuel@fryscryptoexcursions.com"
             git config --local user.name "Fry-Foundation"
+            git config --local pull.rebase false
             git reset --hard HEAD
             git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
-
+            
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
             fi
             source myenv/bin/activate
             
-            # Debug: List files to ensure requirements.txt is present
-            echo "Files in $TARGET_DIR:"
-            ls -la
             # Install the latest requirements file
             if [ -f "requirements.txt" ]; then
               echo "Using requirements file: requirements.txt"
@@ -118,7 +108,6 @@ jobs:
 
   nginx-config:
     runs-on: ubuntu-latest
-    
     needs: deploy
     steps:
       - name: Configure and Restart Nginx
@@ -127,13 +116,13 @@ jobs:
           sudo nginx -t
           sudo systemctl restart nginx
           sudo systemctl status nginx
+
   notify:
     runs-on: ubuntu-latest
-    
     needs: nginx-config
     if: success()
     steps:
       - name: Notify Success
         run: |
-          echo "🎉 Staging deployment was successful! 🚀"
-          echo "The latest changes have been deployed to staging, and Nginx has been reconfigured."
+          echo "🎉 Production deployment was successful! 🚀"
+          echo "The latest changes have been deployed to production, and Nginx has been reconfigured."
