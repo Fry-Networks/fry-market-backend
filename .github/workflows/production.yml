@@ -57,50 +57,55 @@ jobs:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
           SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
           HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
-          TARGET_DIR: '/root/production_Env/fry-market-backend'
+          TARGET_DIR: '/root/production_Env/fry-network-python'
         run: |
           # Ensure .ssh directory exists and add your server's host key to known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
-
+          # Add GitHub's SSH key to known_hosts to avoid host verification failures
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+          
           # SSH to the server and execute deployment steps
           sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
             set -e
-            echo "Deploying to production server"
-
-            # Navigate to the target directory
+            echo "Deploying to staging"
             cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
+            # Debug: List files in the target directory
             echo "Listing files in $TARGET_DIR:"
             ls -la
-
-            # Configure Git to treat this directory as safe and pull latest code from the correct repository
+            # Configure Git to treat this directory as safe
             git config --global --add safe.directory "$TARGET_DIR"
-            git pull git@github.com:Fry-Foundation/fry-market-backend.git main || { echo "Failed to pull latest code"; exit 1; }
-
+            # Pull the latest code using SSH from GitHub
+            git pull git@github.com:Octaloop-Technologies/fry-network-python.git main
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
             fi
             source myenv/bin/activate
-
-            # Install requirements if the file exists
+            
+            # Debug: List files to ensure requirements.txt is present
+            echo "Files in $TARGET_DIR:"
+            ls -la
+            # Install the latest requirements file
             if [ -f "requirements.txt" ]; then
-              echo "Installing dependencies from requirements.txt"
+              echo "Using requirements file: requirements.txt"
               pip install --upgrade pip
-              pip install -r requirements.txt
+              pip install -r "requirements.txt"
             else
-              echo "No requirements file found"; exit 1
+              echo "No requirements file found"
+              exit 1
             fi
-
+            
             # Clean pip cache
             pip cache purge
-
+            
             # Restart the service
             sudo systemctl daemon-reload
             sudo systemctl restart fry-foundation-production.service 
-            sudo systemctl status fry-foundation-production.service -l || { echo "Service restart failed"; exit 1; }
+            sudo systemctl status fry-foundation-production.service 
           EOF
         shell: bash
+
 
   nginx-config:
     runs-on: ubuntu-latest
