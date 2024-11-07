@@ -75,7 +75,9 @@ jobs:
             # Configure Git to treat this directory as safe
             git config --global --add safe.directory "$TARGET_DIR"
             # Pull the latest code using SSH from GitHub
-            git pull git@github.com:Fry-Foundation/fry-market-backend.git main
+            # Pull the latest code using SSH from GitHub with the --allow-unrelated-histories flag
+            git pull git@github.com:Fry-Foundation/fry-market-backend.git main --allow-unrelated-histories
+
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
