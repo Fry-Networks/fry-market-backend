@@ -47,11 +47,11 @@ jobs:
               git remote set-url origin $GIT_REPO_SSH_URL
             fi
 
-            # Set pull strategy to merge to handle divergent branches
+            # Set pull strategy to merge and allow unrelated histories
             git config pull.rebase false
 
-            # Pull the latest code from the repository
-            git pull origin main || { echo "Git pull failed"; exit 1; }
+            # Pull the latest code from the repository, allowing unrelated histories
+            git pull origin main --allow-unrelated-histories || { echo "Git pull failed"; exit 1; }
 
             # Ensure virtual environment exists and activate it
             if [ ! -d "venv" ]; then
