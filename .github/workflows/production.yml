@@ -1,3 +1,4 @@
+
 name: Deploy fry-foundation to Production server
 
 on:
@@ -10,14 +11,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set up SSH key
-        uses: webfactory/ssh-agent@v0.6.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      # - name: Set up SSH key
+      #   uses: webfactory/ssh-agent@v0.6.0
+      #   with:
+      #     ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Checkout code
+      - name: Checkout code using SSH
         uses: actions/checkout@v4
         with:
+          repository: Fry-Foundation/fry-market-backend 
+          # ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
           persist-credentials: false
           clean: true
           fetch-depth: 1
@@ -26,14 +29,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y sshpass
-          
-      - name: Add GitHub to known_hosts
+      - name: Create .ssh directory and add GitHub.com to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-
   test:
     runs-on: ubuntu-latest
+ 
     needs: setup
     steps:
       - name: Run tests
@@ -44,9 +46,9 @@ jobs:
           else
             echo "No test cases file found"
           fi
-
   deploy:
     runs-on: ubuntu-latest
+   
     needs: test
     steps:
       - name: Deploy to Server
@@ -56,29 +58,36 @@ jobs:
           HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
           TARGET_DIR: '/root/production_Env/fry-network-python'
         run: |
+          # Ensure .ssh directory exists and add your server's host key to known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
+          # Add GitHub's SSH key to known_hosts to avoid host verification failures
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
           
+          # SSH to the server and execute deployment steps
           sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
             set -e
-            echo "Deploying to production server"
+            echo "Deploying to staging"
             cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
-            
+            # Debug: List files in the target directory
             echo "Listing files in $TARGET_DIR:"
             ls -la
-            
+            # Configure Git to treat this directory as safe
             git config --global --add safe.directory "$TARGET_DIR"
-            
-            # Pull the latest code
-            git pull origin main
-            
+            # Pull the latest code using SSH from GitHub
+            git pull git@github.com:Octaloop-Technologies/fry-network-python.git main
+            # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
             fi
             source myenv/bin/activate
-
-            echo "Checking for requirements file..."
+            
+            # Debug: List files to ensure requirements.txt is present
+            echo "Files in $TARGET_DIR:"
+            ls -la
+            # Install the latest requirements file
             if [ -f "requirements.txt" ]; then
+              echo "Using requirements file: requirements.txt"
               pip install --upgrade pip
               pip install -r "requirements.txt"
             else
@@ -86,8 +95,10 @@ jobs:
               exit 1
             fi
             
+            # Clean pip cache
             pip cache purge
             
+            # Restart the service
             sudo systemctl daemon-reload
             sudo systemctl restart fry-foundation-production.service 
             sudo systemctl status fry-foundation-production.service 
@@ -96,6 +107,7 @@ jobs:
 
   nginx-config:
     runs-on: ubuntu-latest
+  
     needs: deploy
     steps:
       - name: Configure and Restart Nginx
@@ -104,13 +116,13 @@ jobs:
           sudo nginx -t
           sudo systemctl restart nginx
           sudo systemctl status nginx
-
   notify:
     runs-on: ubuntu-latest
+
     needs: nginx-config
     if: success()
     steps:
       - name: Notify Success
         run: |
-          echo "🎉 Production deployment was successful! 🚀"
-          echo "The latest changes have been deployed to production, and Nginx has been reconfigured."
+          echo "🎉 Staging deployment was successful! 🚀"
+          echo "The latest changes have been deployed to staging, and Nginx has been reconfigured."
