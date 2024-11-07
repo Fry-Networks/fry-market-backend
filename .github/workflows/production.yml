@@ -1,4 +1,3 @@
-
 name: Deploy fry-foundation to Production server
 
 on:
@@ -11,16 +10,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # - name: Set up SSH key
-      #   uses: webfactory/ssh-agent@v0.6.0
-      #   with:
-      #     ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      - name: Set up SSH key
+        uses: webfactory/ssh-agent@v0.6.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       - name: Checkout code using SSH
         uses: actions/checkout@v4
         with:
-          repository: Fry-Foundation/fry-market-backend 
-          # ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
+          repository: Fry-Foundation/fry-market-backend
           persist-credentials: false
           clean: true
           fetch-depth: 1
@@ -29,14 +27,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y sshpass
+          
       - name: Create .ssh directory and add GitHub.com to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+
   test:
     runs-on: ubuntu-latest
- 
     needs: setup
+
     steps:
       - name: Run tests
         run: |
@@ -46,83 +46,86 @@ jobs:
           else
             echo "No test cases file found"
           fi
+
   deploy:
     runs-on: ubuntu-latest
-   
     needs: test
+
     steps:
       - name: Deploy to Server
         env:
           SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
           SSH_PASSWORD: ${{ secrets.PRODUCTION_SSH_PASSWORD }}
           HOST_IP: ${{ secrets.PRODUCTION_HOST_IP }}
-          TARGET_DIR: '/root/production_Env/fry-network-python'
+          TARGET_DIR: '/root/production_Env/fry-market-backend'
         run: |
           # Ensure .ssh directory exists and add your server's host key to known_hosts
           mkdir -p ~/.ssh
           ssh-keyscan -H $HOST_IP >> ~/.ssh/known_hosts
-          # Add GitHub's SSH key to known_hosts to avoid host verification failures
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
-          
+
           # SSH to the server and execute deployment steps
           sshpass -p "$SSH_PASSWORD" ssh -t -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
             set -e
-            echo "Deploying to staging"
+            echo "Deploying to production server"
+
+            # Navigate to the target directory
             cd "$TARGET_DIR" || { echo "Directory not found: $TARGET_DIR"; exit 1; }
-            # Debug: List files in the target directory
             echo "Listing files in $TARGET_DIR:"
             ls -la
-            # Configure Git to treat this directory as safe
+
+            # Configure Git to treat this directory as safe and pull latest code from the correct repository
             git config --global --add safe.directory "$TARGET_DIR"
-            # Pull the latest code using SSH from GitHub
-            git pull git@github.com:Octaloop-Technologies/fry-network-python.git main
+            git pull git@github.com:Fry-Foundation/fry-market-backend.git main || { echo "Failed to pull latest code"; exit 1; }
+
             # Create or activate virtual environment
             if [ ! -d "myenv" ]; then
               python3.11 -m venv myenv
             fi
             source myenv/bin/activate
-            
-            # Debug: List files to ensure requirements.txt is present
-            echo "Files in $TARGET_DIR:"
-            ls -la
-            # Install the latest requirements file
+
+            # Install requirements if the file exists
             if [ -f "requirements.txt" ]; then
-              echo "Using requirements file: requirements.txt"
+              echo "Installing dependencies from requirements.txt"
               pip install --upgrade pip
-              pip install -r "requirements.txt"
+              pip install -r requirements.txt
             else
-              echo "No requirements file found"
-              exit 1
+              echo "No requirements file found"; exit 1
             fi
-            
+
             # Clean pip cache
             pip cache purge
-            
+
             # Restart the service
             sudo systemctl daemon-reload
             sudo systemctl restart fry-foundation-production.service 
-            sudo systemctl status fry-foundation-production.service 
+            sudo systemctl status fry-foundation-production.service -l || { echo "Service restart failed"; exit 1; }
           EOF
         shell: bash
 
   nginx-config:
     runs-on: ubuntu-latest
-  
     needs: deploy
+
     steps:
       - name: Configure and Restart Nginx
         run: |
-          sudo apt install nginx -y
+          # Install nginx if not installed
+          if ! command -v nginx &> /dev/null; then
+            sudo apt install nginx -y
+          fi
+
+          # Test and reload Nginx configuration
           sudo nginx -t
           sudo systemctl restart nginx
           sudo systemctl status nginx
+
   notify:
     runs-on: ubuntu-latest
-
     needs: nginx-config
     if: success()
+
     steps:
       - name: Notify Success
         run: |
-          echo "🎉 Staging deployment was successful! 🚀"
-          echo "The latest changes have been deployed to staging, and Nginx has been reconfigured."
+          echo "🎉 Production deployment was successful! 🚀"
+          echo "The latest changes have been deployed to production, and Nginx has been reconfigured."
