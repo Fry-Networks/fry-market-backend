@@ -79,7 +79,7 @@ jobs:
             
             # Force pull the latest code to avoid merge conflicts
             git reset --hard  # Discard any local changes
-            git pull origin main
+            git pull origin main --allow-unrelated-histories
             # Pull the latest code using SSH from GitHub
             # Pull the latest code using SSH from GitHub with the --allow-unrelated-histories flag
             # git config --local user.email "ci-deploy@fry-foundation.org"
