@@ -106,8 +106,8 @@ jobs:
             
             # Restart the service
             sudo systemctl daemon-reload
-            sudo systemctl restart fry-foundation-production.service 
-            sudo systemctl status fry-foundation-production.service 
+            sudo systemctl restart fry-backend.service 
+            sudo systemctl status fry-backend.service
           EOF
         shell: bash
 
