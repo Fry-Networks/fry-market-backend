@@ -345,8 +345,7 @@ def generate_images_route():
 
     
 @socketio.on('generate-images')
-def generate_images_route():
-    data = request.json
+def generate_images_socket(data):
     wallet_address = data.get('wallet_address')
     prompt = data.get('prompt', "A lighthouse on a cliff")
     style = data.get('style', None)
@@ -404,10 +403,10 @@ def generate_images_route():
                 "metadata": metadata_url
             })
 
-        return jsonify({"image_responses": image_responses})
+        socketio.emit('image_responses', {'image_responses': image_responses})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        socketio.emit('error', {'error': str(e)})
 
 @app.route('/upload-metadata', methods=['POST'])
 def upload_metadata():
