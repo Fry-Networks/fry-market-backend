@@ -344,69 +344,69 @@ def generate_images_route():
         return jsonify({"error": str(e)}), 500
 
     
-@socketio.on('generate-images')
-def generate_images_socket(data):
-    wallet_address = data.get('wallet_address')
-    prompt = data.get('prompt', "A lighthouse on a cliff")
-    style = data.get('style', None)
-    num_images = data.get('num_images', 1)
+# @socketio.on('generate-images')
+# def generate_images_socket(data):
+#     wallet_address = data.get('wallet_address')
+#     prompt = data.get('prompt', "A lighthouse on a cliff")
+#     style = data.get('style', None)
+#     num_images = data.get('num_images', 1)
 
-    if not isinstance(num_images, int) or num_images <= 0:
-        return jsonify({"error": "Number of images must be a positive integer."}), 400
+#     if not isinstance(num_images, int) or num_images <= 0:
+#         return jsonify({"error": "Number of images must be a positive integer."}), 400
 
-    try:
-        image_urls = generate_images(num_images, prompt, style)
-        image_responses = []
+#     try:
+#         image_urls = generate_images(num_images, prompt, style)
+#         image_responses = []
 
-        for image_url in image_urls:
-            description = generate_image_description(image_url)
-            print("@@@@@@@@@@@@@", description)
+#         for image_url in image_urls:
+#             description = generate_image_description(image_url)
+#             print("@@@@@@@@@@@@@", description)
 
-            # Check if the description is None or an empty string
-            if not description or not isinstance(description, str):
-                return jsonify({"error": "Invalid image description generated."}), 400
+#             # Check if the description is None or an empty string
+#             if not description or not isinstance(description, str):
+#                 return jsonify({"error": "Invalid image description generated."}), 400
             
-            # Clean up the description to remove unwanted characters
-            cleaned_description = re.sub(r'//|\\n', '', description)
+#             # Clean up the description to remove unwanted characters
+#             cleaned_description = re.sub(r'//|\\n', '', description)
 
-            # If description is a JSON string, parse it
-            try:
-                description_json = json.loads(cleaned_description)
+#             # If description is a JSON string, parse it
+#             try:
+#                 description_json = json.loads(cleaned_description)
 
-                # Prepare the metadata object without the description key
-                metadata = {
-                    "image": image_url,
-                    "name": description_json.get("name"),
-                    "extra": description_json.get("extra", {}),
-                    "standard": description_json.get("standard"),
-                    "properties": description_json.get("properties", {}),
-                    "description": description_json.get("description"),
-                    "image_mime_type": description_json.get("image_mime_type"),
-                    "extra_properties": description_json.get("extra_properties", {})
-                }
+#                 # Prepare the metadata object without the description key
+#                 metadata = {
+#                     "image": image_url,
+#                     "name": description_json.get("name"),
+#                     "extra": description_json.get("extra", {}),
+#                     "standard": description_json.get("standard"),
+#                     "properties": description_json.get("properties", {}),
+#                     "description": description_json.get("description"),
+#                     "image_mime_type": description_json.get("image_mime_type"),
+#                     "extra_properties": description_json.get("extra_properties", {})
+#                 }
 
-            except json.JSONDecodeError:
-                # Handle the case where it's not valid JSON
-                metadata = {
-                    "image": image_url,
-                    "description": cleaned_description  # Fallback if parsing fails
-                }
+#             except json.JSONDecodeError:
+#                 # Handle the case where it's not valid JSON
+#                 metadata = {
+#                     "image": image_url,
+#                     "description": cleaned_description  # Fallback if parsing fails
+#                 }
 
-            # Define S3 key and upload the metadata
-            metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
-            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
+#             # Define S3 key and upload the metadata
+#             metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
+#             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
-            # Add image URL, metadata URL, and name to the response
-            image_responses.append({
-                "name": metadata["name"],  # Extract name from metadata
-                "image": image_url,
-                "metadata": metadata_url
-            })
+#             # Add image URL, metadata URL, and name to the response
+#             image_responses.append({
+#                 "name": metadata["name"],  # Extract name from metadata
+#                 "image": image_url,
+#                 "metadata": metadata_url
+#             })
 
-        socketio.emit('image_responses', {'image_responses': image_responses})
+#         socketio.emit('image_responses', {'image_responses': image_responses})
 
-    except Exception as e:
-        socketio.emit('error', {'error': str(e)})
+#     except Exception as e:
+#         socketio.emit('error', {'error': str(e)})
 
 @app.route('/upload-metadata', methods=['POST'])
 def upload_metadata():
