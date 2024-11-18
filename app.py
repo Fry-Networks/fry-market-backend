@@ -132,7 +132,7 @@ def generate_short_unique_id(length=5):
 def upload_to_s3(image_data, s3_bucket, s3_key_prefix):
     # Generate a unique 5-character key for the image
     unique_id = generate_short_unique_id()
-    s3_key = f"AI/{unique_id}.png"
+    s3_key = f"{unique_id}.png"
     
     # Upload the image to S3
     s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=image_data, ContentType='image/png')
