@@ -484,28 +484,38 @@ def create_collection():
     listed_nfts = data.get('listed_nfts', [])
     image_url = data.get('image_url', '')
     description = data.get('description', '')
-    
+    royalty = data.get('royalty', 0)  # New field for royalty
+
     # if wallet_address != current_wallet_address:
     #     return jsonify({'error': 'Wallet address does not match the token!'}), 403
 
     if not collection_name or not collection_address:
         return jsonify({"error": "Collection name and address are required"}), 400
 
-    # Check if the collection address already exists
-    existing_collection = nft_collection.find_one({'collection_address': collection_address})
+    # Check if the wallet address already has an existing collection
+    existing_collection = nft_collection.find_one({'wallet_address': wallet_address})
     if existing_collection:
+        return jsonify({"error": "A collection for this wallet address already exists"}), 400
+
+    # Check if the collection address already exists
+    existing_collection_address = nft_collection.find_one({'collection_address': collection_address})
+    if existing_collection_address:
         return jsonify({"error": "A collection with this address already exists"}), 400
 
+    # Prepare the data to insert
     collection_data = {
+        'wallet_address': wallet_address,
         'collection_name': collection_name,
         'collection_address': collection_address,
         'listed_nfts': listed_nfts,
         'image_url': image_url,
-        'description': description
+        'description': description,
+        'royalty': royalty  # Save the royalty value
     }
 
     result = nft_collection.insert_one(collection_data)
     return jsonify({"message": "Collection created", "collection_id": str(result.inserted_id)}), 201
+
 
 
 # API to update an existing collection (add/remove NFTs in listed NFTs)
