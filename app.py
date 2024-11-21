@@ -145,7 +145,7 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
 
     # Generate a unique filename and ensure it's safe
     unique_id = generate_short_unique_id()
-    object_name = f"{folder_name}/{unique_id}.png"
+    object_name = f"AI/{unique_id}.png"
 
     try:
         # Ensure file has a valid file-like object
