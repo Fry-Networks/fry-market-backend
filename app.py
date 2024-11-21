@@ -129,16 +129,45 @@ def generate_short_unique_id(length=5):
     # Generate a random 5-character alphanumeric string
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-def upload_to_s3(image_data, s3_bucket, s3_key_prefix):
-    # Generate a unique 5-character key for the image
+def upload_to_s3(file, bucket_name, folder_name="AI"):
+    """
+    Upload a PNG image to an AWS S3 bucket with content type and a unique identifier.
+
+    Parameters:
+    - file: The file object to be uploaded.
+    - bucket_name: The name of the S3 bucket to upload to.
+    - folder_name: The folder in the S3 bucket where the file will be stored.
+
+    Returns:
+    - str: The URL of the uploaded image in the S3 bucket.
+    """
+    s3_client = boto3.client('s3')
+
+    # Generate a unique filename and ensure it's safe
     unique_id = generate_short_unique_id()
-    s3_key = f"{unique_id}.png"
-    
-    # Upload the image to S3
-    s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=image_data, ContentType='image/png')
-    
-    # Return the URL of the uploaded image
-    return f"https://{s3_bucket}.s3.amazonaws.com/AI/{s3_key}"
+    object_name = f"{folder_name}/{unique_id}.png"
+
+    try:
+        # Ensure file has a valid file-like object
+        if not hasattr(file, "read"):
+            raise ValueError("Invalid file object")
+
+        # Upload file to S3 with ContentType set to 'image/png'
+        s3_client.upload_fileobj(
+            file,
+            bucket_name,
+            object_name,
+            ExtraArgs={"ContentType": "image/png"}  # Fixed ContentType for PNG images
+        )
+
+        # Generate the public file URL
+        file_url = f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
+        return file_url
+
+    except ValueError as ve:
+        raise Exception(f"Invalid file: {ve}")
+    except Exception as e:
+        raise Exception(f"Failed to upload file: {str(e)}")
 
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
     images_per_request = 10
@@ -189,6 +218,7 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
     return image_urls
 
 def generate_image_description(image_url):
+    print(image_url)
     prompt = f"""
     You are required to provide the response in a specific JSON format.
     The fields required are as follows:
@@ -222,6 +252,8 @@ def generate_image_description(image_url):
         'extra_properties': {{}}
     }}"""
     
+    print(prompt)
+    
     response = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -235,6 +267,8 @@ def generate_image_description(image_url):
         ],
         max_tokens=2000,
     )
+    
+    print(response)
 
     description = response.choices[0]
     # Accessing the content of the message
