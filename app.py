@@ -23,6 +23,8 @@ import json
 import random
 import string
 import re
+from botocore.exceptions import ClientError
+
 
 load_dotenv()
 
@@ -124,31 +126,47 @@ def token_required(f):
     
     return decorated
 
+# AWS Secrets Manager to retrieve S3 credentials
+def get_secret():
+    secret_name = "MyS3Credentials"
+    region_name = "us-east-1"
 
+    # Create a Secrets Manager client
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='secretsmanager',
+        region_name=region_name
+    )
+
+    try:
+        get_secret_value_response = client.get_secret_value(
+            SecretId=secret_name
+        )
+    except ClientError as e:
+        raise e
+
+    secret = get_secret_value_response['SecretString']
+    # Assuming secret is a JSON with access_key and secret_key
+    return json.loads(secret)
+
+# Function to generate a short unique ID
 def generate_short_unique_id(length=5):
-    # Generate a random 5-character alphanumeric string
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
+# Function to upload to S3
 def upload_to_s3(file, bucket_name, folder_name="AI"):
-    """
-    Upload a PNG image to an AWS S3 bucket with content type and a unique identifier.
-
-    Parameters:
-    - file: The file object to be uploaded.
-    - bucket_name: The name of the S3 bucket to upload to.
-    - folder_name: The folder in the S3 bucket where the file will be stored.
-
-    Returns:
-    - str: The URL of the uploaded image in the S3 bucket.
-    """
-    s3_client = boto3.client('s3')
+    credentials = get_secret()  # Get S3 credentials from Secrets Manager
+    s3_client = boto3.client(
+        's3',
+        aws_access_key_id=credentials['aws_access_key_id'],
+        aws_secret_access_key=credentials['aws_secret_access_key']
+    )
 
     # Generate a unique filename and ensure it's safe
     unique_id = generate_short_unique_id()
-    object_name = f"AI/{unique_id}.png"
+    object_name = f"{folder_name}/{unique_id}.png"
 
     try:
-        # Ensure file has a valid file-like object
         if not hasattr(file, "read"):
             raise ValueError("Invalid file object")
 
@@ -169,6 +187,7 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
     except Exception as e:
         raise Exception(f"Failed to upload file: {str(e)}")
 
+# Function to generate images from a prompt
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
     images_per_request = 10
     num_requests = (num_images + images_per_request - 1) // images_per_request
@@ -207,8 +226,8 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
 
         for i, image in enumerate(data["artifacts"]):
             image_idx = request_idx * images_per_request + i
-            image_name = f""
-            s3_key = f"{image_name}"
+            image_name = f"image_{image_idx}"
+            s3_key = f"AI/{image_name}"
 
             # Decode image from base64 and upload to S3
             image_data = base64.b64decode(image["base64"])
@@ -217,6 +236,7 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
 
     return image_urls
 
+# Function to generate image description using GPT
 def generate_image_description(image_url):
     print(image_url)
     prompt = f"""
@@ -234,7 +254,7 @@ def generate_image_description(image_url):
     Use the following format for your response:
     {{
         'name': 'Character Name',
-        'extra': {{}},
+        'extra': {{}} ,
         'image': '{image_url}',
         'standard': 'arc3',
         'properties': {{
@@ -249,69 +269,43 @@ def generate_image_description(image_url):
         }},
         'description': 'Character description here',
         'image_mime_type': 'image/png',
-        'extra_properties': {{}}
+        'extra_properties': {{}} 
     }}"""
-    
+
     print(prompt)
-    
+
     response = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            }
-        ],
+        messages=[{"role": "user", "content": prompt}],
         max_tokens=2000,
     )
-    
-    print(response)
 
     description = response.choices[0]
-    # Accessing the content of the message
     description_content = description.message.content
 
-    # Print the description content
-    print(description_content)
-    
-    # Remove unnecessary escape characters and clean the JSON format
+    # Clean the description content
     cleaned_description = re.sub(r'\\n', '', description_content)
     cleaned_description = re.sub(r'```json', '', cleaned_description)
     cleaned_description = re.sub(r'```', '', cleaned_description)
 
     try:
-        # Parse the cleaned JSON string
         parsed_json = json.loads(cleaned_description)
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
         return None
 
-    # Print the formatted JSON
     formatted_json = json.dumps(parsed_json, indent=2)
     print(formatted_json)  # Optionally print the formatted JSON for verification
-    
+
     return formatted_json
 
+# Function to upload metadata to S3
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
-    s3.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
+    s3_client = boto3.client('s3')
+    s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
     return f"https://{s3_bucket}.s3.amazonaws.com/{s3_key}"
 
-def extract_name_from_metadata(metadata_url):
-    # Fetch the metadata from the provided URL
-    response = requests.get(metadata_url)
-    
-    if response.status_code == 200:
-        metadata = response.json()
-        # The name is inside the description, which is a string containing JSON
-        description_json = json.loads(metadata["description"].strip("```json\n"))  # Clean up the string and load as JSON
-        name = description_json.get("name", "Unknown")  # Extract name
-        return name
-    else:
-        raise Exception(f"Failed to fetch metadata from {metadata_url}. Status code: {response.status_code}")
-
+# Route to generate images and upload them with metadata
 @app.route('/generate-images', methods=['POST'])
 def generate_images_route():
     data = request.json
@@ -331,18 +325,15 @@ def generate_images_route():
             description = generate_image_description(image_url)
             print("@@@@@@@@@@@@@", description)
 
-            # Check if the description is None or an empty string
             if not description or not isinstance(description, str):
                 return jsonify({"error": "Invalid image description generated."}), 400
-            
-            # Clean up the description to remove unwanted characters
+
+            # Clean up the description
             cleaned_description = re.sub(r'//|\\n', '', description)
 
-            # If description is a JSON string, parse it
             try:
                 description_json = json.loads(cleaned_description)
 
-                # Prepare the metadata object without the description key
                 metadata = {
                     "image": image_url,
                     "name": description_json.get("name"),
@@ -353,21 +344,17 @@ def generate_images_route():
                     "image_mime_type": description_json.get("image_mime_type"),
                     "extra_properties": description_json.get("extra_properties", {})
                 }
-
             except json.JSONDecodeError:
-                # Handle the case where it's not valid JSON
                 metadata = {
                     "image": image_url,
-                    "description": cleaned_description  # Fallback if parsing fails
+                    "description": cleaned_description
                 }
 
-            # Define S3 key and upload the metadata
             metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
-            # Add image URL, metadata URL, and name to the response
             image_responses.append({
-                "name": metadata["name"],  # Extract name from metadata
+                "name": metadata["name"],
                 "image": image_url,
                 "metadata": metadata_url
             })
@@ -376,6 +363,7 @@ def generate_images_route():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
     
 # @socketio.on('generate-images')
