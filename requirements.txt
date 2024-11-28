@@ -9,3 +9,4 @@ pymongo
 web3
 PyJWT
 Flask-SocketIO
+botocore
