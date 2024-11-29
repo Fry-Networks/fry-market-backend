@@ -180,7 +180,7 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
         )
 
         # Generate the public file URL
-        file_url = f"https://fry-backend.s3.amazonaws.com/{object_name}"
+        file_url = f"https://fry-backend.s3.us-east-1.amazonaws.com/{object_name}"
         return file_url
 
     except ValueError as ve:
@@ -304,7 +304,7 @@ def generate_image_description(image_url):
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
     s3_client = boto3.client('s3')
     s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
-    return f"https://fry-backend.s3.amazonaws.com/{s3_key}"
+    return f"https://fry-backend.s3.us-east-1.amazonaws.com/{s3_key}"
 
 # Route to generate images and upload them with metadata
 @app.route('/generate-images', methods=['POST'])
@@ -364,8 +364,6 @@ def generate_images_route():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
     
 # @socketio.on('generate-images')
 # def generate_images_socket(data):
