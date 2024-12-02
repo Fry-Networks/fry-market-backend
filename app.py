@@ -126,46 +126,26 @@ def token_required(f):
     
     return decorated
 
-# AWS Secrets Manager to retrieve S3 credentials
-def get_secret():
-    secret_name = "MyS3Credentials"
-    region_name = "us-east-1"
-
-    # Create a Secrets Manager client
-    session = boto3.session.Session()
-    client = session.client(
-        service_name='secretsmanager',
-        region_name=region_name
-    )
-
-    try:
-        get_secret_value_response = client.get_secret_value(
-            SecretId=secret_name
-        )
-    except ClientError as e:
-        raise e
-
-    secret = get_secret_value_response['SecretString']
-    print(secret)
-    # Assuming secret is a JSON with access_key and secret_key
-    return json.loads(secret)
-
 # Function to generate a short unique ID
 def generate_short_unique_id(length=5):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-# Function to upload to S3
 def upload_to_s3(file, bucket_name, folder_name="AI"):
-    credentials = get_secret()  # Get S3 credentials from Secrets Manager
     s3_client = boto3.client(
         's3',
-        aws_access_key_id=credentials['aws_access_key_id'],
-        aws_secret_access_key=credentials['aws_secret_access_key']
+        aws_access_key_id='REDACTED_ROTATE_ME',
+        aws_secret_access_key='REDACTED_ROTATE_ME'
     )
 
-    # Generate a unique filename and ensure it's safe
-    unique_id = generate_short_unique_id()
+    # Ensure the folder name is correct
+    folder_name = "AI"  # Explicitly reset folder_name to prevent unwanted changes
+    unique_id = generate_short_unique_id()  # Generate unique ID
+    print(f"Unique ID: {unique_id}")
+    print(f"Folder Name: {folder_name}")
+    
+    # Construct object_name
     object_name = f"{folder_name}/{unique_id}.png"
+    print(f"Object Name: {object_name}")
 
     try:
         if not hasattr(file, "read"):
@@ -180,13 +160,14 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
         )
 
         # Generate the public file URL
-        file_url = f"https://fry-backend.s3.us-east-1.amazonaws.com/{object_name}"
+        file_url = f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
         return file_url
 
     except ValueError as ve:
         raise Exception(f"Invalid file: {ve}")
     except Exception as e:
         raise Exception(f"Failed to upload file: {str(e)}")
+
 
 # Function to generate images from a prompt
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
