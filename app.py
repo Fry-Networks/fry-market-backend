@@ -770,6 +770,11 @@ def store_email():
     if not wallet_address or not email:
         return jsonify({"error": "Both wallet_address and email are required"}), 400
 
+    # Check if the email already exists in the database
+    existing_email = email_collection.find_one({'email': email})
+    if existing_email:
+        return jsonify({"error": "Email already exists"}), 409  # 409 Conflict status code
+
     # Store data in the 'email' collection
     email_data = {
         'wallet_address': wallet_address,
@@ -779,7 +784,6 @@ def store_email():
     email_collection.insert_one(email_data)
 
     return jsonify({"message": "Success"}), 201
-
 
 if __name__ == '__main__':
     socketio.run(app, debug=True)
