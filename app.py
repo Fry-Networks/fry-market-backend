@@ -133,7 +133,7 @@ def generate_short_unique_id(length=5):
 def upload_to_s3(file, bucket_name, folder_name="AI"):
     s3_client = boto3.client(
         's3',
-        aws_access_key_id='REDACTED_ROTATE_MEa',
+        aws_access_key_id='REDACTED_ROTATE_ME',
         aws_secret_access_key='/+KDVga0b2gCjnukWeOFiUF01jMZlJH/D0wadnPA'
     )
 
