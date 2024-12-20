@@ -285,7 +285,7 @@ def generate_image_description(image_url):
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
     s3_client = boto3.client('s3')
     s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
-    return f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+    return f"https://fry-market.s3.amazonaws.com/{s3_key}"
 
 # Route to generate images and upload them with metadata
 @app.route('/generate-images', methods=['POST'])
