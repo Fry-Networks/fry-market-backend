@@ -60,7 +60,7 @@ s3 = boto3.client(
 
 # OpenAI setup
 openai.api_key = openai_api_key
-socketio = SocketIO(app, cors_allowed_origins="*")
+# socketio = SocketIO(app, cors_allowed_origins="*")
 
 # socketio = SocketIO(app)
 
@@ -222,38 +222,38 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
 def generate_image_description(image_url):
     print(image_url)
     prompt = f"""
-    You are required to provide the response in a specific JSON format.
-    The fields required are as follows:
-    - 'name': a unique identifier for the character
-    - 'extra': an empty dictionary
-    - 'image': the provided image URL
-    - 'standard': set to 'arc3'
-    - 'properties': a dictionary containing attributes like 'Eyes', 'Skin', 'Tail', 'Mouth', 'Eyewear', 'Special', 'Headgear', and 'Background'
-    - 'description': a brief character description
-    - 'image_mime_type': a string representing the image MIME type (e.g., 'image/png')
-    - 'extra_properties': an empty dictionary
+        You are required to provide the response in a specific JSON format.
+        The fields required are as follows:
+        - "name": a unique identifier for the character
+        - "extra": an empty dictionary
+        - "image": the provided image URL
+        - "standard": set to "arc3"
+        - "properties": a dictionary containing attributes like "Eyes", "Skin", "Tail", "Mouth", "Eyewear", "Special", "Headgear", and "Background"
+        - "description": a brief character description
+        - "image_mime_type": a string representing the image MIME type (e.g., "image/png")
+        - "extra_properties": an empty dictionary
 
-    Use the following format for your response:
-    {{
-        'name': 'Character Name',
-        'extra': {{}} ,
-        'image': '{image_url}',
-        'standard': 'arc3',
-        'properties': {{
-            'Eyes': 'Glaring',
-            'Skin': 'Breeze',
-            'Tail': 'None',
-            'Mouth': 'None',
-            'Eyewear': 'None',
-            'Special': 'None',
-            'Headgear': 'Leafs',
-            'Background': 'Softy'
-        }},
-        'description': 'Character description here',
-        'image_mime_type': 'image/png',
-        'extra_properties': {{}} 
-    }}"""
-
+        Use the following format for your response:
+        {{
+            "name": "Character Name",
+            "extra": {{}},
+            "image": "{image_url}",
+            "standard": "arc3",
+            "properties": {{
+                "Eyes": "Glaring",
+                "Skin": "Breeze",
+                "Tail": "None",
+                "Mouth": "None",
+                "Eyewear": "None",
+                "Special": "None",
+                "Headgear": "Leafs",
+                "Background": "Softy"
+            }},
+            "description": "Character description here",
+            "image_mime_type": "image/png",
+            "extra_properties": {{}}
+        }}
+        """
     print(prompt)
 
     response = openai.chat.completions.create(
@@ -786,4 +786,4 @@ def store_email():
     return jsonify({"message": "Success"}), 201
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    app.run(debug=True)
