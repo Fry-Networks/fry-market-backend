@@ -194,8 +194,8 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                     }
                 ],
                 "cfg_scale": 7,
-                "height": 1024,
-                "width": 1024,
+                "height": 600,
+                "width": 600,
                 "samples": samples,
                 "steps": 30,
             },
