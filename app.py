@@ -50,6 +50,7 @@ db = client['Frynetwork']
 nft_collection = db['nft_collection']
 profile_settings_collection = db['profile_settings']
 email_collection = db['email']  # Create/Use the 'email' collection
+image_collection = db['images']  # Create/Use the 'images' collection
 
 s3 = boto3.client(
     's3',
@@ -61,8 +62,7 @@ s3 = boto3.client(
 # OpenAI setup
 openai.api_key = openai_api_key
 # socketio = SocketIO(app, cors_allowed_origins="*")
-
-# socketio = SocketIO(app)
+socketio = SocketIO(app)
 
 app.config['SECRET_KEY'] = secrets.token_hex(32)  # Generate a 64-character random hex string for the secret key
 
@@ -296,21 +296,22 @@ def generate_images_route():
     style = data.get('style', None)
     num_images = data.get('num_images', 1)
 
+    if not wallet_address:
+        return jsonify({"error": "Wallet address is required."}), 400
+
     if not isinstance(num_images, int) or num_images <= 0:
         return jsonify({"error": "Number of images must be a positive integer."}), 400
 
     try:
+        # Generate images and their URLs
         image_urls = generate_images(num_images, prompt, style)
         image_responses = []
 
         for image_url in image_urls:
             description = generate_image_description(image_url)
-            print("@@@@@@@@@@@@@", description)
-
             if not description or not isinstance(description, str):
                 return jsonify({"error": "Invalid image description generated."}), 400
 
-            # Clean up the description
             cleaned_description = re.sub(r'//|\\n', '', description)
 
             try:
@@ -336,9 +337,25 @@ def generate_images_route():
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
             image_responses.append({
-                "name": metadata["name"],
+                "name": metadata.get("name"),
                 "image": image_url,
                 "metadata": metadata_url
+            })
+
+        # Save or append the results to the database
+        existing_record = image_collection.find_one({"wallet_address": wallet_address})
+
+        if existing_record:
+            # Append new images and metadata
+            image_collection.update_one(
+                {"wallet_address": wallet_address},
+                {"$push": {"images": {"$each": image_responses}}}
+            )
+        else:
+            # Insert new record for the wallet address
+            image_collection.insert_one({
+                "wallet_address": wallet_address,
+                "images": image_responses
             })
 
         return jsonify({"image_responses": image_responses})
@@ -346,76 +363,103 @@ def generate_images_route():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-# @socketio.on('generate-images')
-# def generate_images_socket(data):
-#     wallet_address = data.get('wallet_address')
-#     prompt = data.get('prompt', "A lighthouse on a cliff")
-#     style = data.get('style', None)
-#     num_images = data.get('num_images', 1)
+@app.route('/get-images/<wallet_address>', methods=['GET'])
+def get_images_by_wallet(wallet_address):
+    if not wallet_address:
+        return jsonify({"error": "Wallet address is required."}), 400
 
-#     if not isinstance(num_images, int) or num_images <= 0:
-#         return jsonify({"error": "Number of images must be a positive integer."}), 400
+    try:
+        # Fetch the record for the given wallet address
+        record = image_collection.find_one({"wallet_address": wallet_address}, {"_id": 0})  # Exclude MongoDB `_id` field
 
-#     try:
-#         image_urls = generate_images(num_images, prompt, style)
-#         image_responses = []
+        if not record:
+            return jsonify({"error": "No data found for the provided wallet address."}), 404
 
-#         for image_url in image_urls:
-#             description = generate_image_description(image_url)
-#             print("@@@@@@@@@@@@@", description)
+        return jsonify(record)
 
-#             # Check if the description is None or an empty string
-#             if not description or not isinstance(description, str):
-#                 return jsonify({"error": "Invalid image description generated."}), 400
-            
-#             # Clean up the description to remove unwanted characters
-#             cleaned_description = re.sub(r'//|\\n', '', description)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-#             # If description is a JSON string, parse it
-#             try:
-#                 description_json = json.loads(cleaned_description)
+    
+@socketio.on('generate-images')
+def generate_images_socket(data):
+    data = request.json
+    wallet_address = data.get('wallet_address')
+    prompt = data.get('prompt', "A lighthouse on a cliff")
+    style = data.get('style', None)
+    num_images = data.get('num_images', 1)
 
-#                 # Prepare the metadata object without the description key
-#                 metadata = {
-#                     "image": image_url,
-#                     "name": description_json.get("name"),
-#                     "extra": description_json.get("extra", {}),
-#                     "standard": description_json.get("standard"),
-#                     "properties": description_json.get("properties", {}),
-#                     "description": description_json.get("description"),
-#                     "image_mime_type": description_json.get("image_mime_type"),
-#                     "extra_properties": description_json.get("extra_properties", {})
-#                 }
+    if not wallet_address:
+        return jsonify({"error": "Wallet address is required."}), 400
 
-#             except json.JSONDecodeError:
-#                 # Handle the case where it's not valid JSON
-#                 metadata = {
-#                     "image": image_url,
-#                     "description": cleaned_description  # Fallback if parsing fails
-#                 }
+    if not isinstance(num_images, int) or num_images <= 0:
+        return jsonify({"error": "Number of images must be a positive integer."}), 400
 
-#             # Define S3 key and upload the metadata
-#             metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
-#             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
+    try:
+        # Generate images and their URLs
+        image_urls = generate_images(num_images, prompt, style)
+        image_responses = []
 
-#             # Add image URL, metadata URL, and name to the response
-#             image_responses.append({
-#                 "name": metadata["name"],  # Extract name from metadata
-#                 "image": image_url,
-#                 "metadata": metadata_url
-#             })
+        for image_url in image_urls:
+            description = generate_image_description(image_url)
+            if not description or not isinstance(description, str):
+                return jsonify({"error": "Invalid image description generated."}), 400
 
-#         socketio.emit('image_responses', {'image_responses': image_responses})
+            cleaned_description = re.sub(r'//|\\n', '', description)
 
-#     except Exception as e:
-#         socketio.emit('error', {'error': str(e)})
+            try:
+                description_json = json.loads(cleaned_description)
+
+                metadata = {
+                    "image": image_url,
+                    "name": description_json.get("name"),
+                    "extra": description_json.get("extra", {}),
+                    "standard": description_json.get("standard"),
+                    "properties": description_json.get("properties", {}),
+                    "description": description_json.get("description"),
+                    "image_mime_type": description_json.get("image_mime_type"),
+                    "extra_properties": description_json.get("extra_properties", {})
+                }
+            except json.JSONDecodeError:
+                metadata = {
+                    "image": image_url,
+                    "description": cleaned_description
+                }
+
+            metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
+            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
+
+            image_responses.append({
+                "name": metadata.get("name"),
+                "image": image_url,
+                "metadata": metadata_url
+            })
+
+        # Save or append the results to the database
+        existing_record = image_collection.find_one({"wallet_address": wallet_address})
+
+        if existing_record:
+            # Append new images and metadata
+            image_collection.update_one(
+                {"wallet_address": wallet_address},
+                {"$push": {"images": {"$each": image_responses}}}
+            )
+        else:
+            # Insert new record for the wallet address
+            image_collection.insert_one({
+                "wallet_address": wallet_address,
+                "images": image_responses
+            })
+
+        socketio.emit({'image_responses': image_responses})
+
+    except Exception as e:
+        socketio.emit('error', {'error': str(e)})
 
 @app.route('/upload-metadata', methods=['POST'])
 def upload_metadata():
-    # Get JSON data from request
     metadata = request.json
 
-    # Extract the image URL and create JSON filename
     image_url = metadata.get('image')
     if not image_url:
         return jsonify({'error': 'No image URL provided'}), 400
@@ -786,4 +830,4 @@ def store_email():
     return jsonify({"message": "Success"}), 201
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    socketio.run(app, debug=True)
