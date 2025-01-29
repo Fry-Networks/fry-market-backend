@@ -3,121 +3,108 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Image Generator by </title>
-    <script src="https://cdn.socket.io/4.4.1/socket.io.min.js"></script>
+    <title>WebSocket Image Generation Test</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 20px;
-            padding: 0;
         }
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        h1 {
-            text-align: center;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        .form-group input, .form-group textarea {
-            width: 100%;
-            padding: 8px;
-            box-sizing: border-box;
-        }
-        .form-group button {
-            padding: 10px 15px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        .form-group button:hover {
-            background-color: #0056b3;
-        }
-        #results {
+        #logs {
             margin-top: 20px;
-        }
-        .image-container {
-            margin-bottom: 15px;
-        }
-        .image-container img {
-            max-width: 100%;
-            height: auto;
-        }
-        .metadata {
-            margin-top: 10px;
+            border: 1px solid #ddd;
             padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .log {
+            margin-bottom: 10px;
+        }
+        .image {
+            max-width: 200px;
+            display: block;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Image Generator</h1>
-        <div class="form-group">
-            <label for="num_images">Number of Images:</label>
-            <input type="number" id="num_images" min="1" value="1">
-        </div>
-        <div class="form-group">
-            <label for="prompt">Prompt:</label>
-            <textarea id="prompt" rows="4">A lighthouse on a cliff</textarea>
-        </div>
-        <div class="form-group">
-            <label for="style">Style:</label>
-            <input type="text" id="style" placeholder="e.g., watercolor, abstract">
-        </div>
-        <div class="form-group">
-            <button id="generateButton">Generate Images</button>
-        </div>
-        <div id="results"></div>
-    </div>
-    
+    <h1>WebSocket Image Generation Test</h1>
+
+    <form id="websocketForm">
+        <label>
+            Wallet Address:
+            <input type="text" id="walletAddress" value="your-wallet-address" required>
+        </label>
+        <br><br>
+        <label>
+            Prompt:
+            <input type="text" id="prompt" value="A lighthouse on a cliff" required>
+        </label>
+        <br><br>
+        <label>
+            Style:
+            <input type="text" id="style" value="">
+        </label>
+        <br><br>
+        <label>
+            Number of Images:
+            <input type="number" id="numImages" value="3" min="1" required>
+        </label>
+        <br><br>
+        <button type="submit">Start Generation</button>
+    </form>
+
+    <div id="logs"></div>
+
     <script>
-        // Connect to Socket.IO server
-        const socket = io();
+        const form = document.getElementById("websocketForm");
+        const logsDiv = document.getElementById("logs");
 
-        document.getElementById('generateButton').addEventListener('click', () => {
-            const numImages = parseInt(document.getElementById('num_images').value, 10);
-            const prompt = document.getElementById('prompt').value;
-            const style = document.getElementById('style').value;
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
 
-            // Emit event to server
-            socket.emit('generate-images', { num_images: numImages, prompt: prompt, style: style });
-        });
+            const walletAddress = document.getElementById("walletAddress").value;
+            const prompt = document.getElementById("prompt").value;
+            const style = document.getElementById("style").value;
+            const numImages = parseInt(document.getElementById("numImages").value);
 
-        // Listen for response from server
-        socket.on('response', (data) => {
-            const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = '';
+            const ws = new WebSocket("ws://127.0.0.1:8000/ws");
 
-            if (data.error) {
-                resultsDiv.innerHTML = `<p style="color: red;">Error: ${data.error}</p>`;
-                return;
-            }
+            ws.onopen = () => {
+                logsDiv.innerHTML += `<div class="log">WebSocket connected. Sending data...</div>`;
+                ws.send(JSON.stringify({
+                    wallet_address: walletAddress,
+                    prompt: prompt,
+                    style: style,
+                    num_images: numImages
+                }));
+            };
 
-            data.image_responses.forEach((response) => {
-                const imageContainer = document.createElement('div');
-                imageContainer.className = 'image-container';
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
 
-                const img = document.createElement('img');
-                img.src = response.image_url;
-                imageContainer.appendChild(img);
+                if (data.type === "image") {
+                    logsDiv.innerHTML += `
+                        <div class="log">
+                            <strong>Image URL:</strong> <a href="${data.data}" target="_blank">${data.data}</a>
+                            <img src="${data.data}" class="image" />
+                        </div>`;
+                } else if (data.type === "metadata") {
+                    logsDiv.innerHTML += `
+                        <div class="log">
+                            <strong>Metadata:</strong> <pre>${JSON.stringify(data.data, null, 2)}</pre>
+                        </div>`;
+                } else if (data.error) {
+                    logsDiv.innerHTML += `<div class="log error"><strong>Error:</strong> ${data.error}</div>`;
+                }
+            };
 
-                const metadataLink = document.createElement('a');
-                metadataLink.href = response.metadata_url;
-                metadataLink.textContent = 'View Metadata';
-                metadataLink.target = '_blank';
-                imageContainer.appendChild(metadataLink);
+            ws.onclose = () => {
+                logsDiv.innerHTML += `<div class="log">WebSocket disconnected.</div>`;
+            };
 
-                resultsDiv.appendChild(imageContainer);
-            });
+            ws.onerror = (error) => {
+                logsDiv.innerHTML += `<div class="log error"><strong>Error:</strong> ${error.message}</div>`;
+            };
         });
     </script>
 </body>

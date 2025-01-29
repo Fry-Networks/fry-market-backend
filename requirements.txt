@@ -1,12 +1,20 @@
-Flask
+irements.txt file that includes all the libraries used in your code:
+
+plaintext
+Copy
+Edit
+fastapi
+uvicorn
+fastapi-socketio
 requests
 boto3
 openai
 python-dotenv
-gunicorn
-flask-cors
 pymongo
+python-jose
 web3
-PyJWT
-Flask-SocketIO
+jinja2
+python-jwt
+pydantic
+base64
 botocore

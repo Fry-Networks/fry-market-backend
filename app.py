@@ -1,5 +1,7 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi_socketio import SocketManager
 import base64
 import io
 import requests
@@ -7,32 +9,45 @@ import boto3
 import openai
 import json
 from dotenv import load_dotenv
+from fastapi import FastAPI, WebSocket, HTTPException
 import os
 import pymongo
+from fastapi.responses import FileResponse
 from bson.objectid import ObjectId
 import datetime
 import secrets
 import jwt
 from web3 import Web3
 from functools import wraps
-from flask_socketio import SocketIO, emit
-from flask import Flask, render_template
-from flask_socketio import SocketIO, send
 import uuid
-import json
 import random
 import string
 import re
 from botocore.exceptions import ClientError
+from fastapi import File, UploadFile, Form
+from typing import List
+import time
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 
+# Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
-CORS(app)
+# Initialize FastAPI app
+app = FastAPI()
 
-# CORS(app)  # Enable CORS for all routes
+# Set up templates folder (equivalent to Flask's templates folder)
+templates = Jinja2Templates(directory="templates")
 
+# CORS configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Configuration
 engine_id = "stable-diffusion-v1-6"
@@ -41,8 +56,7 @@ api_key = os.getenv('STABILITY_API_KEY')
 s3_bucket = os.getenv('S3_BUCKET')
 s3_folder = os.getenv('S3_FOLDER')
 openai_api_key = os.getenv('OPENAI_API_KEY')
-app.config['SECRET_KEY'] = secrets.token_hex(16)  
-
+app.secret_key = secrets.token_hex(16)
 
 # MongoDB connection
 client = pymongo.MongoClient("mongodb+srv://frysamuel:WY8umbCtmkr@frynetwork.l921m.mongodb.net/?retryWrites=true&w=majority&appName=frynetwork")
@@ -52,98 +66,92 @@ profile_settings_collection = db['profile_settings']
 email_collection = db['email']  # Create/Use the 'email' collection
 image_collection = db['images']  # Create/Use the 'images' collection
 
-s3 = boto3.client(
-    's3',
-    aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-    aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-    region_name='us-east-2'
-)
-
+# S3 setup
+s3_client = boto3.client(
+        's3',
+        aws_access_key_id='REDACTED_ROTATE_ME',
+        aws_secret_access_key='/+KDVga0b2gCjnukWeOFiUF01jMZlJH/D0wadnPA'
+    )
 # OpenAI setup
 openai.api_key = openai_api_key
-# socketio = SocketIO(app, cors_allowed_origins="*")
-socketio = SocketIO(app)
 
-app.config['SECRET_KEY'] = secrets.token_hex(32)  # Generate a 64-character random hex string for the secret key
-
-def validate_wallet_address(wallet_address):
-    # Check if the address length is 64 characters and consists only of alphanumeric characters
+# Utility functions
+def validate_wallet_address(wallet_address: str) -> bool:
+    """Check if the wallet address is valid."""
     if len(wallet_address) == 58 and wallet_address.isalnum():
         return True
     return False
 
-
-def generate_token(wallet_address):
+def generate_token(wallet_address: str) -> str:
+    """Generate a JWT token for the wallet address."""
     payload = {
         'wallet_address': wallet_address,
         'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)  # Token valid for 1 hour
     }
-    token = jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
-    
-    # Ensure the token is a string
+    token = jwt.encode(payload, app.secret_key, algorithm='HS256')
+
     if isinstance(token, bytes):
         token = token.decode('utf-8')
-    
+
     return token
 
-@app.route('/get-token', methods=['POST'])
-def get_token():
-    data = request.get_json()
-    
+# Routes
+@app.post("/get-token")
+async def get_token(request: Request):
+    """Generate a JWT token based on the provided wallet address."""
+    data = await request.json()
+
     # Debugging: Print the received data
     print("Received data:", data)
-    
+
     wallet_address = data.get('wallet_address')
-    
+
     if not wallet_address:
-        return jsonify({'error': 'Wallet address is required'}), 400
-    
+        raise HTTPException(status_code=400, detail="Wallet address is required")
+
     # Debugging: Print the wallet address and validation result
     print("Wallet address:", wallet_address)
     if validate_wallet_address(wallet_address):
         token = generate_token(wallet_address)
-        return jsonify({'token': token}), 200
+        return JSONResponse(content={"token": token}, status_code=200)
     else:
-        return jsonify({'error': 'Invalid wallet address'}), 400
+        raise HTTPException(status_code=400, detail="Invalid wallet address")
 
-
+# Utility functions
 def token_required(f):
     @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get('x-access-token')
-        if not token:
-            return jsonify({'error': 'Token is missing!'}), 403
+    async def decorated(*args, x_access_token: str = Header(None), **kwargs):
+        if not x_access_token:
+            raise HTTPException(status_code=403, detail="Token is missing!")
 
         try:
-            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+            data = jwt.decode(x_access_token, app.secret_key, algorithms=['HS256'])
             current_wallet_address = data['wallet_address']
         except jwt.ExpiredSignatureError:
-            return jsonify({'error': 'Token has expired!'}), 403
+            raise HTTPException(status_code=403, detail="Token has expired!")
         except jwt.InvalidTokenError:
-            return jsonify({'error': 'Token is invalid!'}), 403
-        
-        return f(current_wallet_address, *args, **kwargs)
-    
+            raise HTTPException(status_code=403, detail="Token is invalid!")
+
+        return await f(current_wallet_address, *args, **kwargs)
+
     return decorated
 
-# Function to generate a short unique ID
 def generate_short_unique_id(length=5):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def upload_to_s3(file, bucket_name, folder_name="AI"):
     s3_client = boto3.client(
         's3',
-        aws_access_key_id='REDACTED_ROTATE_ME',
-        aws_secret_access_key='/+KDVga0b2gCjnukWeOFiUF01jMZlJH/D0wadnPA'
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name='us-east-2'
     )
 
-    # Ensure the folder name is correct
-    folder_name = "AI"  # Explicitly reset folder_name to prevent unwanted changes
-    unique_id = generate_short_unique_id()  # Generate unique ID
+    folder_name = "AI"
+    unique_id = generate_short_unique_id()
     print(f"Unique ID: {unique_id}")
     print(f"Folder Name: {folder_name}")
-    
-    # Construct object_name
+
     object_name = f"{folder_name}/{unique_id}.png"
     print(f"Object Name: {object_name}")
 
@@ -151,15 +159,13 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
         if not hasattr(file, "read"):
             raise ValueError("Invalid file object")
 
-        # Upload file to S3 with ContentType set to 'image/png'
         s3_client.upload_fileobj(
             file,
             bucket_name,
             object_name,
-            ExtraArgs={"ContentType": "image/png"}  # Fixed ContentType for PNG images
+            ExtraArgs={"ContentType": "image/png"}
         )
 
-        # Generate the public file URL
         file_url = f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
         return file_url
 
@@ -168,8 +174,6 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
     except Exception as e:
         raise Exception(f"Failed to upload file: {str(e)}")
 
-
-# Function to generate images from a prompt
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
     images_per_request = 10
     num_requests = (num_images + images_per_request - 1) // images_per_request
@@ -194,8 +198,8 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                     }
                 ],
                 "cfg_scale": 7,
-                "height": 600,
-                "width": 600,
+                "height": 1024,
+                "width": 1024,
                 "samples": samples,
                 "steps": 30,
             },
@@ -211,7 +215,6 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
             image_name = f"image_{image_idx}"
             s3_key = f"AI/{image_name}"
 
-            # Decode image from base64 and upload to S3
             image_data = base64.b64decode(image["base64"])
             image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
             image_urls.append(image_url)
@@ -219,8 +222,17 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
     return image_urls
 
 # Function to generate image description using GPT
-def generate_image_description(image_url):
-    print(image_url)
+async def generate_image_description(image_url: str) -> dict:
+    """
+    Generates a detailed JSON description for the provided image URL using GPT.
+
+    Args:
+        image_url (str): The URL of the image.
+
+    Returns:
+        dict: The generated description in a structured JSON format.
+    """
+    print(f"Generating description for image: {image_url}")
     prompt = f"""
         You are required to provide the response in a specific JSON format.
         The fields required are as follows:
@@ -253,64 +265,66 @@ def generate_image_description(image_url):
             "image_mime_type": "image/png",
             "extra_properties": {{}}
         }}
-        """
+    """
     print(prompt)
 
-    response = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=2000,
-    )
-
-    description = response.choices[0]
-    description_content = description.message.content
-
-    # Clean the description content
-    cleaned_description = re.sub(r'\\n', '', description_content)
-    cleaned_description = re.sub(r'```json', '', cleaned_description)
-    cleaned_description = re.sub(r'```', '', cleaned_description)
-
     try:
+        # Call OpenAI GPT-4 for generating description
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2000,
+        )
+
+        # Extract the description content
+        description = response.choices[0]
+        description_content = description.message.content
+
+        print(f"Description content: {description_content}")
+
+        # Clean the response content
+        cleaned_description = re.sub(r'\\n', '', description_content)
+        cleaned_description = re.sub(r'```json', '', cleaned_description)
+        cleaned_description = re.sub(r'```', '', cleaned_description)
+
+        # Parse the cleaned content to JSON
         parsed_json = json.loads(cleaned_description)
+        return parsed_json  # Return the JSON as a dictionary
+
     except json.JSONDecodeError as e:
         print(f"Error parsing JSON: {e}")
-        return None
+        raise HTTPException(status_code=500, detail="Error parsing JSON response from GPT.")
 
-    formatted_json = json.dumps(parsed_json, indent=2)
-    print(formatted_json)  # Optionally print the formatted JSON for verification
-
-    return formatted_json
-
-# Function to upload metadata to S3
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        raise HTTPException(status_code=500, detail="An unexpected error occurred.")
+    
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
     s3_client = boto3.client('s3')
     s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
-    return f"https://fry-market.s3.amazonaws.com/{s3_key}"
+    return f"https://{s3_bucket}.s3.amazonaws.com/{s3_key}"
 
-# Route to generate images and upload them with metadata
-@app.route('/generate-images', methods=['POST'])
-def generate_images_route():
-    data = request.json
+@app.post('/generate-images')
+async def generate_images_route(request: Request):
+    data = await request.json()
     wallet_address = data.get('wallet_address')
     prompt = data.get('prompt', "A lighthouse on a cliff")
     style = data.get('style', None)
     num_images = data.get('num_images', 1)
 
-    if not wallet_address:
-        return jsonify({"error": "Wallet address is required."}), 400
-
     if not isinstance(num_images, int) or num_images <= 0:
-        return jsonify({"error": "Number of images must be a positive integer."}), 400
+        raise HTTPException(status_code=400, detail="Number of images must be a positive integer.")
 
     try:
-        # Generate images and their URLs
         image_urls = generate_images(num_images, prompt, style)
         image_responses = []
 
         for image_url in image_urls:
             description = generate_image_description(image_url)
+            print("@@@@@@@@@@@@@", description)
+
             if not description or not isinstance(description, str):
-                return jsonify({"error": "Invalid image description generated."}), 400
+                raise HTTPException(status_code=400, detail="Invalid image description generated.")
 
             cleaned_description = re.sub(r'//|\\n', '', description)
 
@@ -337,497 +351,368 @@ def generate_images_route():
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
             image_responses.append({
-                "name": metadata.get("name"),
+                "name": metadata["name"],
                 "image": image_url,
                 "metadata": metadata_url
             })
 
-        # Save or append the results to the database
-        existing_record = image_collection.find_one({"wallet_address": wallet_address})
-
-        if existing_record:
-            # Append new images and metadata
-            image_collection.update_one(
-                {"wallet_address": wallet_address},
-                {"$push": {"images": {"$each": image_responses}}}
-            )
-        else:
-            # Insert new record for the wallet address
-            image_collection.insert_one({
-                "wallet_address": wallet_address,
-                "images": image_responses
-            })
-
-        return jsonify({"image_responses": image_responses})
+        return {"image_responses": image_responses}
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    
-@app.route('/get-images/<wallet_address>', methods=['GET'])
-def get_images_by_wallet(wallet_address):
-    if not wallet_address:
-        return jsonify({"error": "Wallet address is required."}), 400
+        raise HTTPException(status_code=500, detail=str(e))
 
+# Define route for the index page
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.websocket("/ws")
+async def websocket_generate_images(websocket: WebSocket):
+    await websocket.accept()
     try:
-        # Fetch the record for the given wallet address
-        record = image_collection.find_one({"wallet_address": wallet_address}, {"_id": 0})  # Exclude MongoDB `_id` field
-
-        if not record:
-            return jsonify({"error": "No data found for the provided wallet address."}), 404
-
-        return jsonify(record)
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    
-@socketio.on('generate-images')
-def generate_images_socket(data):
-    data = request.json
-    wallet_address = data.get('wallet_address')
-    prompt = data.get('prompt', "A lighthouse on a cliff")
-    style = data.get('style', None)
-    num_images = data.get('num_images', 1)
-
-    if not wallet_address:
-        return jsonify({"error": "Wallet address is required."}), 400
-
-    if not isinstance(num_images, int) or num_images <= 0:
-        return jsonify({"error": "Number of images must be a positive integer."}), 400
-
-    try:
-        # Generate images and their URLs
-        image_urls = generate_images(num_images, prompt, style)
-        image_responses = []
-
-        for image_url in image_urls:
-            description = generate_image_description(image_url)
-            if not description or not isinstance(description, str):
-                return jsonify({"error": "Invalid image description generated."}), 400
-
-            cleaned_description = re.sub(r'//|\\n', '', description)
-
+        while True:
             try:
-                description_json = json.loads(cleaned_description)
+                # Receive data from WebSocket
+                data = await websocket.receive_json()
+                print(f"Received data: {data}")
 
-                metadata = {
-                    "image": image_url,
-                    "name": description_json.get("name"),
-                    "extra": description_json.get("extra", {}),
-                    "standard": description_json.get("standard"),
-                    "properties": description_json.get("properties", {}),
-                    "description": description_json.get("description"),
-                    "image_mime_type": description_json.get("image_mime_type"),
-                    "extra_properties": description_json.get("extra_properties", {})
-                }
-            except json.JSONDecodeError:
-                metadata = {
-                    "image": image_url,
-                    "description": cleaned_description
-                }
+                # Ensure data is a dictionary
+                if not isinstance(data, dict):
+                    await websocket.send_json({"error": "Invalid data format. Expected a JSON object."})
+                    continue
 
-            metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
-            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
+                # Extract fields from the data
+                wallet_address = data.get("wallet_address")
+                prompt = data.get("prompt", "A lighthouse on a cliff")
+                style = data.get("style", None)
+                num_images = data.get("num_images", 1)
 
-            image_responses.append({
-                "name": metadata.get("name"),
-                "image": image_url,
-                "metadata": metadata_url
-            })
+                # Validate wallet address
+                if not wallet_address:
+                    await websocket.send_json({"error": "Wallet address is required"})
+                    continue
 
-        # Save or append the results to the database
-        existing_record = image_collection.find_one({"wallet_address": wallet_address})
+                # Validate number of images
+                if not isinstance(num_images, int) or num_images <= 0:
+                    await websocket.send_json({"error": "Number of images must be a positive integer"})
+                    continue
 
-        if existing_record:
-            # Append new images and metadata
-            image_collection.update_one(
-                {"wallet_address": wallet_address},
-                {"$push": {"images": {"$each": image_responses}}}
-            )
-        else:
-            # Insert new record for the wallet address
-            image_collection.insert_one({
-                "wallet_address": wallet_address,
-                "images": image_responses
-            })
+                # Process the request
+                try:
+                    # Generate image URLs
+                    image_urls = generate_images(num_images, prompt, style)
+                    print(f"Generated image URLs: {image_urls}")
 
-        socketio.emit({'image_responses': image_responses})
+                    for image_url in image_urls:
+                        # Generate metadata for the image
+                        description = await generate_image_description(image_url)  # FIXED: Await the async function
+                        print(f"Generated description: {description}")
+
+                        # Ensure description is a parsed dictionary
+                        if isinstance(description, str):
+                            try:
+                                description = json.loads(description)
+                                print(f"Description JSON: {description}")
+                            except json.JSONDecodeError as e:
+                                await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                                continue
+
+                        if not isinstance(description, dict):
+                            await websocket.send_json({"error": "Invalid description format returned"})
+                            continue
+
+                        # Create metadata
+                        metadata = {
+                            "name": description.get("name"),
+                            "image": image_url,
+                            "metadata": upload_metadata_to_s3(
+                                description,
+                                s3_bucket,
+                                f"AI/{description.get('name')}.json"
+                            )
+                        }
+
+                        # Send the image URL first
+                        await websocket.send_json({"type": "image", "data": image_url})
+
+                        # Then send the metadata
+                        await websocket.send_json({"type": "metadata", "data": metadata})
+
+                except Exception as e:
+                    await websocket.send_json({"error": f"Failed to process images: {str(e)}"})
+
+            except ValueError as e:
+                # Handle invalid JSON
+                await websocket.send_json({"error": f"Invalid JSON received: {str(e)}"})
+                continue
 
     except Exception as e:
-        socketio.emit('error', {'error': str(e)})
+        print(f"WebSocket error: {e}")
+        await websocket.close()
 
-@app.route('/upload-metadata', methods=['POST'])
-def upload_metadata():
-    metadata = request.json
-
-    image_url = metadata.get('image')
+    
+@app.post("/upload-metadata")
+async def upload_metadata(metadata: dict):
+    image_url = metadata.get("image")
     if not image_url:
-        return jsonify({'error': 'No image URL provided'}), 400
+        raise HTTPException(status_code=400, detail="No image URL provided")
 
-    # Create the JSON file name by replacing the file extension with .json
-    # Get only the last part of the image URL
-    image_filename = image_url.rsplit('/', 1)[-1]  # Extract the last part of the URL
-    json_file_name = image_filename.rsplit('.', 1)[0] + '.json'  # Replace .png with .json
+    image_filename = image_url.rsplit("/", 1)[-1]
+    json_file_name = image_filename.rsplit(".", 1)[0] + ".json"
 
-    # Upload the JSON metadata to S3
     try:
-        s3.put_object(
-            Bucket=s3_bucket,  # Use the bucket from the environment variable
-            Key=json_file_name,  # Just the file name without folder
+        s3_client.put_object(
+            Bucket=s3_bucket,
+            Key=json_file_name,
             Body=json.dumps(metadata),
-            ContentType='application/json'
+            ContentType="application/json"
         )
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Return the URL of the uploaded JSON file
-    json_url = f'https://{s3_bucket}.s3.amazonaws.com/{json_file_name}'
-    return jsonify({'url': json_url}), 200
+    json_url = f"https://{s3_bucket}.s3.amazonaws.com/{json_file_name}"
+    return {"url": json_url}
 
+@app.post("/upload-nft-image")
+async def upload_image(image: UploadFile = File(...)):
+    unique_id = str(uuid.uuid4().int)[:4]
+    image_file_name = f"{unique_id}.{image.filename.split('.')[-1]}"
 
-@app.route('/upload-nft-image', methods=['POST'])
-def upload_image():
-    # Get image from request
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
-
-    image_file = request.files['image']
-    
-    # Generate a unique 4-digit ID for the image
-    unique_id = str(uuid.uuid4().int)[:4]  # Get first 4 digits of a UUID
-    
-    # Create the image file name using the unique ID and the original file extension
-    image_file_name = f"{unique_id}.{image_file.filename.split('.')[-1]}"
-    
-    # Upload the image to S3
     try:
-        s3.put_object(
+        s3_client.put_object(
             Bucket=s3_bucket,
             Key=image_file_name,
-            Body=image_file.read(),
-            ContentType=image_file.content_type
+            Body=image.file.read(),
+            ContentType=image.content_type
         )
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Return the URL of the uploaded image
-    image_url = f'https://{s3_bucket}.s3.amazonaws.com/{image_file_name}'
-    return jsonify({'url': image_url}), 200
+    image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_file_name}"
+    return {"url": image_url}
 
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-# API to create a new collection
-@app.route('/create-collection', methods=['POST'])
-# @token_required
-def create_collection():
-    data = request.json
-    # wallet_address = data.get('wallet_address')
-    collection_name = data.get('collection_name')
-    collection_address = data.get('collection_address')
-    listed_nfts = data.get('listed_nfts', [])
-    image_url = data.get('image_url', '')
-    description = data.get('description', '')
-    royalty = data.get('royalty', 0)  # New field for royalty
-
-    # if wallet_address != current_wallet_address:
-    #     return jsonify({'error': 'Wallet address does not match the token!'}), 403
+@app.post("/create-collection")
+async def create_collection(data: dict):
+    collection_name = data.get("collection_name")
+    collection_address = data.get("collection_address")
+    listed_nfts = data.get("listed_nfts", [])
+    image_url = data.get("image_url", "")
+    description = data.get("description", "")
+    royalty = data.get("royalty", 0)
 
     if not collection_name or not collection_address:
-        return jsonify({"error": "Collection name and address are required"}), 400
+        raise HTTPException(status_code=400, detail="Collection name and address are required")
 
-    # Check if the collection address already exists
-    existing_collection_address = nft_collection.find_one({'collection_address': collection_address})
-    if existing_collection_address:
-        return jsonify({"error": "A collection with this address already exists"}), 400
+    existing_collection = nft_collection.find_one({"collection_address": collection_address})
+    if existing_collection:
+        raise HTTPException(status_code=400, detail="A collection with this address already exists")
 
-    # Prepare the data to insert
     collection_data = {
-        'collection_name': collection_name,
-        'collection_address': collection_address,
-        'listed_nfts': listed_nfts,
-        'image_url': image_url,
-        'description': description,
-        'royalty': royalty  # Save the royalty value
+        "collection_name": collection_name,
+        "collection_address": collection_address,
+        "listed_nfts": listed_nfts,
+        "image_url": image_url,
+        "description": description,
+        "royalty": royalty
     }
 
     result = nft_collection.insert_one(collection_data)
-    return jsonify({"message": "Collection created", "collection_id": str(result.inserted_id)}), 201
+    return {"message": "Collection created", "collection_id": str(result.inserted_id)}
 
+@app.put("/update-collection/{collection_address}")
+async def update_collection(collection_address: str, data: dict):
+    add_nfts = data.get("add_nfts", [])
+    remove_nfts = data.get("remove_nfts", [])
 
-
-# API to update an existing collection (add/remove NFTs in listed NFTs)
-@app.route('/update-collection/<collection_address>', methods=['PUT'])
-def update_collection(collection_address):
-    data = request.json
-    add_nfts = data.get('add_nfts', [])
-    remove_nfts = data.get('remove_nfts', [])
-
-    collection = nft_collection.find_one({'collection_address': collection_address})
-
+    collection = nft_collection.find_one({"collection_address": collection_address})
     if not collection:
-        return jsonify({"error": "Collection not found"}), 404
+        raise HTTPException(status_code=404, detail="Collection not found")
 
-    listed_nfts = set(collection['listed_nfts'])
-    
-    # Add NFTs
+    listed_nfts = set(collection["listed_nfts"])
     listed_nfts.update(add_nfts)
-
-    # Remove NFTs
     for nft in remove_nfts:
         listed_nfts.discard(nft)
 
     nft_collection.update_one(
-        {'collection_address': collection_address},
-        {'$set': {'listed_nfts': list(listed_nfts)}}
+        {"collection_address": collection_address},
+        {"$set": {"listed_nfts": list(listed_nfts)}}
     )
 
-    return jsonify({"message": "Collection updated"}), 200
+    return {"message": "Collection updated"}
 
-# API to get all collections
-@app.route('/get-all-collections', methods=['GET'])
+def serialize_document(document):
+    document["_id"] = str(document["_id"])
+    return document
+
+@app.get("/get-all-collections")
 def get_all_collections():
-    collections = nft_collection.find()
-    collection_list = []
-    for collection in collections:
-        collection['_id'] = str(collection['_id'])
-        collection_list.append(collection)
-    return jsonify(collection_list), 200
+    collections = list(nft_collection.find())
+    collection_list = [serialize_document(collection) for collection in collections]
+    return collection_list
 
-# API to get a single collection by address
-@app.route('/get-collection/<collection_address>', methods=['GET'])
-def get_collection_by_address(collection_address):
-    collection = nft_collection.find_one({'collection_address': collection_address})
-
+@app.get("/get-collection/{collection_address}")
+def get_collection_by_address(collection_address: str):
+    collection = nft_collection.find_one({"collection_address": collection_address})
     if not collection:
-        return jsonify({"error": "Collection not found"}), 404
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return serialize_document(collection)
 
-    collection['_id'] = str(collection['_id'])
-    return jsonify(collection), 200
-
-@app.route('/upload-images', methods=['POST'])
-def upload_images():
-    if 'images' not in request.files:
-        return jsonify({"error": "No images provided"}), 400
-    
-    image_files = request.files.getlist('images')
-
-    if not image_files or any(image_file.filename == '' for image_file in image_files):
-        return jsonify({"error": "One or more images are not selected"}), 400
+@app.post("/upload-images")
+def upload_images(images: List[UploadFile] = File(...)):
+    if not images:
+        raise HTTPException(status_code=400, detail="No images provided")
 
     try:
         image_urls = []
-
-        for image_file in image_files:
-            # Generate a unique name for each image file in S3
+        for image_file in images:
             image_name = f"manual_nfts/{image_file.filename}"
-            
-            # Upload the image to S3
-            s3.upload_fileobj(image_file, s3_bucket, image_name)
-            
-            # Construct the image URL
+            s3_client.upload_fileobj(image_file.file, s3_bucket, image_name)
             image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_name}"
             image_urls.append(image_url)
-        
-        return jsonify({"image_urls": image_urls}), 200
+
+        return {"image_urls": image_urls}
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.route('/update-followers-following', methods=['POST'])
-# @token_required
-def update_followers_following():
-    data = request.json
-    wallet_address = data.get('wallet_address')
-    new_followers = data.get('followers', [])
-    new_following = data.get('following', [])
-
-    # if wallet_address != current_wallet_address:
-    #     return jsonify({'error': 'Wallet address does not match the token!'}), 403
-
-    # Check if the wallet address exists in the artist profile collection
-    artist_profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-
+@app.post("/update-followers-following")
+def update_followers_following(
+    wallet_address: str = Form(...),
+    followers: List[str] = Form(default=[]),
+    following: List[str] = Form(default=[]),
+):
+    artist_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not artist_profile:
-        return jsonify({"error": "Artist profile not found"}), 404
+        raise HTTPException(status_code=404, detail="Artist profile not found")
 
-    # Append new followers and following data to the existing lists
-    updated_followers = list(set(artist_profile.get('followers', []) + new_followers))
-    updated_following = list(set(artist_profile.get('following', []) + new_following))
+    updated_followers = list(set(artist_profile.get("followers", []) + followers))
+    updated_following = list(set(artist_profile.get("following", []) + following))
 
-    # Update the artist profile in the database
     profile_settings_collection.update_one(
-        {'wallet_address': wallet_address},
-        {'$set': {'followers': updated_followers, 'following': updated_following}}
+        {"wallet_address": wallet_address},
+        {"$set": {"followers": updated_followers, "following": updated_following}},
     )
+    return {"message": "Artist profile updated successfully", "wallet_address": wallet_address}
 
-    return jsonify({"message": "Artist profile updated successfully", "wallet_address": wallet_address}), 200
+@app.post("/profile-settings")
+@app.put("/profile-settings")
+def profile_settings(
+    wallet_address: str = Form(...),
+    display_name: str = Form(None),
+    bio: str = Form(None),
+    email: str = Form(None),
+    website_link: str = Form(None),
+    twitter: str = Form(None),
+    discord: str = Form(None),
+    instagram: str = Form(None),
+    profile_image: str = Form(None),
+    banner_image: str = Form(None),
+):
+    existing_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
 
-
-@app.route('/profile-settings', methods=['POST', 'PUT'])
-# @token_required
-def profile_settings():
-    data = request.json
-    wallet_address = data.get('wallet_address')
-    display_name = data.get('display_name')
-    bio = data.get('bio')
-    email = data.get('email')
-    website_link = data.get('website_link')
-    twitter = data.get('twitter')
-    discord = data.get('discord')
-    instagram = data.get('instagram')
-    profile_image = data.get('profile_image')  # URL or base64 encoded image
-    banner_image = data.get('banner_image')  # URL or base64 encoded image
-    
-    # if wallet_address != current_wallet_address:
-    #     return jsonify({'error': 'Wallet address does not match the token!'}), 403
-
-    # Check if a profile for this wallet address already exists
-    existing_profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-    
     profile_data = {
-        'wallet_address': wallet_address,
-        'display_name': display_name,
-        'bio': bio,
-        'email': email,
-        'website_link': website_link,
-        'twitter': twitter,
-        'discord': discord,
-        'instagram': instagram,
-        'profile_image': profile_image,
-        'banner_image': banner_image
+        "wallet_address": wallet_address,
+        "display_name": display_name,
+        "bio": bio,
+        "email": email,
+        "website_link": website_link,
+        "twitter": twitter,
+        "discord": discord,
+        "instagram": instagram,
+        "profile_image": profile_image,
+        "banner_image": banner_image,
     }
 
     if existing_profile:
-        # Update existing profile
-        profile_settings_collection.update_one({'wallet_address': wallet_address}, {'$set': profile_data})
-        return jsonify({"message": "Profile updated successfully"}), 200
+        profile_settings_collection.update_one(
+            {"wallet_address": wallet_address}, {"$set": profile_data}
+        )
+        return {"message": "Profile updated successfully"}
     else:
-        # Insert new profile
         profile_settings_collection.insert_one(profile_data)
-        return jsonify({"message": "Profile created successfully"}), 201
+        return JSONResponse(content={"message": "Profile created successfully"}, status_code=201)
 
-
-# API to get profile settings by wallet address
-@app.route('/get-profile-settings/<wallet_address>', methods=['GET'])
-def get_profile_settings(wallet_address):
-    profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-
+@app.get("/get-profile-settings/{wallet_address}")
+def get_profile_settings(wallet_address: str):
+    profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not profile:
-        return jsonify({"error": "Profile not found"}), 404
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return serialize_document(profile)
 
-    # Convert the MongoDB object to JSON serializable format
-    profile['_id'] = str(profile['_id'])
-    return jsonify(profile), 200
-
-@app.route('/get-artist-profile/<wallet_address>', methods=['GET'])
-def get_artist_profile(wallet_address):
-    # Retrieve the artist profile from the database using the provided wallet address
-    artist_profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-
+@app.get("/get-artist-profile/{wallet_address}")
+def get_artist_profile(wallet_address: str):
+    artist_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not artist_profile:
-        return jsonify({"error": "Artist profile not found"}), 404
+        raise HTTPException(status_code=404, detail="Artist profile not found")
 
-    # Extract the required fields from the artist profile
     profile_data = {
-        'wallet_address': artist_profile.get('wallet_address'),
-        'banner_image': artist_profile.get('banner_image'),
-        'profile_image': artist_profile.get('profile_image'),
-        'display_name': artist_profile.get('display_name'),
-        'bio': artist_profile.get('bio'),
-        'followers_count': len(artist_profile.get('followers', [])),
-        'following_count': len(artist_profile.get('following', [])),
-        'social_links': {
-            'website': artist_profile.get('social_links', {}).get('website'),
-            'twitter': artist_profile.get('social_links', {}).get('twitter'),
-            'discord': artist_profile.get('social_links', {}).get('discord'),
-            'instagram': artist_profile.get('social_links', {}).get('instagram'),
-            'x': artist_profile.get('social_links', {}).get('x')
-        }
+        "wallet_address": artist_profile.get("wallet_address"),
+        "banner_image": artist_profile.get("banner_image"),
+        "profile_image": artist_profile.get("profile_image"),
+        "display_name": artist_profile.get("display_name"),
+        "bio": artist_profile.get("bio"),
+        "followers_count": len(artist_profile.get("followers", [])),
+        "following_count": len(artist_profile.get("following", [])),
+        "social_links": {
+            "website": artist_profile.get("website_link"),
+            "twitter": artist_profile.get("twitter"),
+            "discord": artist_profile.get("discord"),
+            "instagram": artist_profile.get("instagram"),
+        },
     }
+    return {"profile": profile_data}
 
-    return jsonify({"profile": profile_data}), 200
-
-@app.route('/get-artist-followers/<wallet_address>', methods=['GET'])
-def get_artist_followers(wallet_address):
-    # Retrieve the artist profile from the database using the provided wallet address
-    artist_profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-
+@app.get("/get-artist-followers/{wallet_address}")
+def get_artist_followers(wallet_address: str):
+    artist_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not artist_profile:
-        return jsonify({"error": "Artist profile not found"}), 404
+        raise HTTPException(status_code=404, detail="Artist profile not found")
+    followers = artist_profile.get("followers", [])
+    return {"wallet_address": wallet_address, "followers": followers}
 
-    # Extract the list of followers
-    followers = artist_profile.get('followers', [])
-
-    return jsonify({"wallet_address": wallet_address, "followers": followers}), 200
-
-@app.route('/get-artist-following/<wallet_address>', methods=['GET'])
-def get_artist_following(wallet_address):
-    # Retrieve the artist profile from the database using the provided wallet address
-    artist_profile = profile_settings_collection.find_one({'wallet_address': wallet_address})
-
+@app.get("/get-artist-following/{wallet_address}")
+def get_artist_following(wallet_address: str):
+    artist_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not artist_profile:
-        return jsonify({"error": "Artist profile not found"}), 404
+        raise HTTPException(status_code=404, detail="Artist profile not found")
+    following = artist_profile.get("following", [])
+    return {"wallet_address": wallet_address, "following": following}
 
-    # Extract the list of following
-    following = artist_profile.get('following', [])
-
-    return jsonify({"wallet_address": wallet_address, "following": following}), 200
-
-# API to get all artist profiles
-@app.route('/get-all-profiles', methods=['GET'])
+@app.get("/get-all-profiles")
 def get_all_profiles():
-    profiles = profile_settings_collection.find()
-    profile_list = []
-
-    for profile in profiles:
-        # Convert each profile to a JSON serializable format
-        profile['_id'] = str(profile['_id'])
-        profile_data = {
-            'wallet_address': profile.get('wallet_address'),
-            'banner_image': profile.get('banner_image'),
-            'profile_image': profile.get('profile_image'),
-            'display_name': profile.get('display_name'),
-            'bio': profile.get('bio'),
-            'followers_count': len(profile.get('followers', [])),
-            'following_count': len(profile.get('following', [])),
-            'social_links': {
-                'website': profile.get('website_link'),
-                'twitter': profile.get('twitter'),
-                'discord': profile.get('discord'),
-                'instagram': profile.get('instagram'),
-            }
+    profiles = list(profile_settings_collection.find())
+    profile_list = [
+        {
+            "wallet_address": profile.get("wallet_address"),
+            "banner_image": profile.get("banner_image"),
+            "profile_image": profile.get("profile_image"),
+            "display_name": profile.get("display_name"),
+            "bio": profile.get("bio"),
+            "followers_count": len(profile.get("followers", [])),
+            "following_count": len(profile.get("following", [])),
+            "social_links": {
+                "website": profile.get("website_link"),
+                "twitter": profile.get("twitter"),
+                "discord": profile.get("discord"),
+                "instagram": profile.get("instagram"),
+            },
         }
-        profile_list.append(profile_data)
+        for profile in profiles
+    ]
+    return profile_list
 
-    return jsonify(profile_list), 200
-
-@app.route('/store-email', methods=['POST'])
-def store_email():
-    data = request.json
-    wallet_address = data.get('wallet_address')
-    email = data.get('email')
-
-    # Check for required fields
+@app.post("/store-email")
+def store_email(wallet_address: str = Form(...), email: str = Form(...)):
     if not wallet_address or not email:
-        return jsonify({"error": "Both wallet_address and email are required"}), 400
+        raise HTTPException(status_code=400, detail="Both wallet_address and email are required")
 
-    # Check if the email already exists in the database
-    existing_email = email_collection.find_one({'email': email})
+    existing_email = email_collection.find_one({"email": email})
     if existing_email:
-        return jsonify({"error": "Email already exists"}), 409  # 409 Conflict status code
+        raise HTTPException(status_code=409, detail="Email already exists")
 
-    # Store data in the 'email' collection
-    email_data = {
-        'wallet_address': wallet_address,
-        'email': email
-    }
-
+    email_data = {"wallet_address": wallet_address, "email": email}
     email_collection.insert_one(email_data)
+    return JSONResponse(content={"message": "Success"}, status_code=201)
 
-    return jsonify({"message": "Success"}), 201
-
-if __name__ == '__main__':
-    socketio.run(app, debug=True)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app:app", reload=True, port=8000)
