@@ -425,50 +425,62 @@ async def websocket_generate_images(websocket: WebSocket):
                         print(f"Generated image URLs for batch {batch_index + 1}: {image_urls}")
 
                         for image_url in image_urls:
-                            # Generate metadata for the image
-                            description = await generate_image_description(image_url)
-                            print(f"Generated description: {description}")
+                            try:
+                                # Generate metadata for the image
+                                description = await generate_image_description(image_url)
+                                print(f"Generated description: {description}")
 
-                            # Ensure description is a parsed dictionary
-                            if isinstance(description, str):
-                                try:
-                                    description = json.loads(description)
-                                except json.JSONDecodeError as e:
-                                    await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                                # Ensure description is a parsed dictionary
+                                if isinstance(description, str):
+                                    try:
+                                        description = json.loads(description)
+                                    except json.JSONDecodeError as e:
+                                        await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                                        continue
+
+                                if not isinstance(description, dict):
+                                    await websocket.send_json({"error": "Invalid description format returned"})
                                     continue
 
-                            if not isinstance(description, dict):
-                                await websocket.send_json({"error": "Invalid description format returned"})
-                                continue
+                                # Create metadata
+                                metadata = {
+                                    "wallet_address": wallet_address,
+                                    "name": description.get("name"),
+                                    "image": image_url,
+                                    "extra": description.get("extra", {}),
+                                    "standard": description.get("standard"),
+                                    "properties": description.get("properties", {}),
+                                    "description": description.get("description"),
+                                    "image_mime_type": description.get("image_mime_type"),
+                                    "extra_properties": description.get("extra_properties", {}),
+                                    "prompt": prompt,
+                                    "style": style,
+                                }
 
-                            # Create metadata
-                            metadata = {
-                                "wallet_address": wallet_address,
-                                "name": description.get("name"),
-                                "image": image_url,
-                                "extra": description.get("extra", {}),
-                                "standard": description.get("standard"),
-                                "properties": description.get("properties", {}),
-                                "description": description.get("description"),
-                                "image_mime_type": description.get("image_mime_type"),
-                                "extra_properties": description.get("extra_properties", {}),
-                                "prompt": prompt,
-                                "style": style,
-                            }
+                                # Save metadata to MongoDB
+                                result = image_collection.insert_one(metadata)
+                                metadata["_id"] = str(result.inserted_id)  # Convert ObjectId to string
+                                all_metadata.append(metadata)
 
-                            # Save metadata to MongoDB
-                            result = image_collection.insert_one(metadata)
-                            metadata["_id"] = str(result.inserted_id)  # Convert ObjectId to string
-                            all_metadata.append(metadata)
+                                # Send the image URL first
+                                await websocket.send_json({"type": "image", "data": image_url})
 
-                            # Send the image URL first
-                            await websocket.send_json({"type": "image", "data": image_url})
+                                # Then send the metadata
+                                await websocket.send_json({"type": "metadata", "data": metadata})
 
-                            # Then send the metadata
-                            await websocket.send_json({"type": "metadata", "data": metadata})
+                            except Exception as e:
+                                error_message = f"Failed to process image: {str(e)}"
+                                print(error_message)
+                                await websocket.send_json({"error": error_message})
 
                     except Exception as e:
-                        await websocket.send_json({"error": f"Failed to process batch {batch_index + 1}: {str(e)}"})
+                        # Handle specific moderation error
+                        if "content moderation" in str(e).lower():
+                            error_message = f"Batch {batch_index + 1} flagged by content moderation: {str(e)}"
+                        else:
+                            error_message = f"Failed to process batch {batch_index + 1}: {str(e)}"
+                        print(error_message)
+                        await websocket.send_json({"error": error_message})
 
                 # Once all batches are processed, send a summary message
                 await websocket.send_json({"type": "summary", "data": all_metadata})
