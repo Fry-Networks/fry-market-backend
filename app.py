@@ -315,13 +315,15 @@ async def generate_images_route(request: Request):
     if not isinstance(num_images, int) or num_images <= 0:
         raise HTTPException(status_code=400, detail="Number of images must be a positive integer.")
 
+    if not wallet_address:
+        raise HTTPException(status_code=400, detail="Wallet address is required.")
+
     try:
         image_urls = generate_images(num_images, prompt, style)
         image_responses = []
 
         for image_url in image_urls:
             description = generate_image_description(image_url)
-            print("@@@@@@@@@@@@@", description)
 
             if not description or not isinstance(description, str):
                 raise HTTPException(status_code=400, detail="Invalid image description generated.")
@@ -332,6 +334,7 @@ async def generate_images_route(request: Request):
                 description_json = json.loads(cleaned_description)
 
                 metadata = {
+                    "wallet_address": wallet_address,
                     "image": image_url,
                     "name": description_json.get("name"),
                     "extra": description_json.get("extra", {}),
@@ -339,19 +342,27 @@ async def generate_images_route(request: Request):
                     "properties": description_json.get("properties", {}),
                     "description": description_json.get("description"),
                     "image_mime_type": description_json.get("image_mime_type"),
-                    "extra_properties": description_json.get("extra_properties", {})
+                    "extra_properties": description_json.get("extra_properties", {}),
+                    "prompt": prompt,
+                    "style": style,
                 }
             except json.JSONDecodeError:
                 metadata = {
+                    "wallet_address": wallet_address,
                     "image": image_url,
-                    "description": cleaned_description
+                    "description": cleaned_description,
+                    "prompt": prompt,
+                    "style": style,
                 }
 
             metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
+            # Save metadata to MongoDB
+            image_collection.insert_one(metadata)
+
             image_responses.append({
-                "name": metadata["name"],
+                "name": metadata.get("name"),
                 "image": image_url,
                 "metadata": metadata_url
             })
@@ -365,6 +376,8 @@ async def generate_images_route(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
+
+from bson import ObjectId
 
 @app.websocket("/ws")
 async def websocket_generate_images(websocket: WebSocket):
@@ -397,49 +410,71 @@ async def websocket_generate_images(websocket: WebSocket):
                     await websocket.send_json({"error": "Number of images must be a positive integer"})
                     continue
 
-                # Process the request
-                try:
-                    # Generate image URLs
-                    image_urls = generate_images(num_images, prompt, style)
-                    print(f"Generated image URLs: {image_urls}")
+                # Process images in chunks
+                batch_size = 5
+                total_batches = (num_images + batch_size - 1) // batch_size
+                all_metadata = []
 
-                    for image_url in image_urls:
-                        # Generate metadata for the image
-                        description = await generate_image_description(image_url)  # FIXED: Await the async function
-                        print(f"Generated description: {description}")
+                for batch_index in range(total_batches):
+                    batch_start = batch_index * batch_size
+                    batch_count = min(batch_size, num_images - batch_start)
 
-                        # Ensure description is a parsed dictionary
-                        if isinstance(description, str):
-                            try:
-                                description = json.loads(description)
-                                print(f"Description JSON: {description}")
-                            except json.JSONDecodeError as e:
-                                await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                    try:
+                        # Generate image URLs
+                        image_urls = generate_images(batch_count, prompt, style)
+                        print(f"Generated image URLs for batch {batch_index + 1}: {image_urls}")
+
+                        for image_url in image_urls:
+                            # Generate metadata for the image
+                            description = await generate_image_description(image_url)
+                            print(f"Generated description: {description}")
+
+                            # Ensure description is a parsed dictionary
+                            if isinstance(description, str):
+                                try:
+                                    description = json.loads(description)
+                                except json.JSONDecodeError as e:
+                                    await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                                    continue
+
+                            if not isinstance(description, dict):
+                                await websocket.send_json({"error": "Invalid description format returned"})
                                 continue
 
-                        if not isinstance(description, dict):
-                            await websocket.send_json({"error": "Invalid description format returned"})
-                            continue
+                            # Create metadata
+                            metadata = {
+                                "wallet_address": wallet_address,
+                                "name": description.get("name"),
+                                "image": image_url,
+                                "extra": description.get("extra", {}),
+                                "standard": description.get("standard"),
+                                "properties": description.get("properties", {}),
+                                "description": description.get("description"),
+                                "image_mime_type": description.get("image_mime_type"),
+                                "extra_properties": description.get("extra_properties", {}),
+                                "prompt": prompt,
+                                "style": style,
+                            }
 
-                        # Create metadata
-                        metadata = {
-                            "name": description.get("name"),
-                            "image": image_url,
-                            "metadata": upload_metadata_to_s3(
-                                description,
-                                s3_bucket,
-                                f"AI/{description.get('name')}.json"
-                            )
-                        }
+                            # Save metadata to MongoDB
+                            result = image_collection.insert_one(metadata)
+                            metadata["_id"] = str(result.inserted_id)  # Convert ObjectId to string
+                            all_metadata.append(metadata)
 
-                        # Send the image URL first
-                        await websocket.send_json({"type": "image", "data": image_url})
+                            # Send the image URL first
+                            await websocket.send_json({"type": "image", "data": image_url})
 
-                        # Then send the metadata
-                        await websocket.send_json({"type": "metadata", "data": metadata})
+                            # Then send the metadata
+                            await websocket.send_json({"type": "metadata", "data": metadata})
 
-                except Exception as e:
-                    await websocket.send_json({"error": f"Failed to process images: {str(e)}"})
+                    except Exception as e:
+                        await websocket.send_json({"error": f"Failed to process batch {batch_index + 1}: {str(e)}"})
+
+                # Once all batches are processed, send a summary message
+                await websocket.send_json({"type": "summary", "data": all_metadata})
+
+                # Send an event indicating all data is generated
+                await websocket.send_json({"type": "event", "data": "All data generated"})
 
             except ValueError as e:
                 # Handle invalid JSON
@@ -449,7 +484,6 @@ async def websocket_generate_images(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         await websocket.close()
-
     
 @app.post("/upload-metadata")
 async def upload_metadata(metadata: dict):

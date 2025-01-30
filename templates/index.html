@@ -80,23 +80,30 @@
             };
 
             ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+    const data = JSON.parse(event.data);
 
-                if (data.type === "image") {
-                    logsDiv.innerHTML += `
-                        <div class="log">
-                            <strong>Image URL:</strong> <a href="${data.data}" target="_blank">${data.data}</a>
-                            <img src="${data.data}" class="image" />
-                        </div>`;
-                } else if (data.type === "metadata") {
-                    logsDiv.innerHTML += `
-                        <div class="log">
-                            <strong>Metadata:</strong> <pre>${JSON.stringify(data.data, null, 2)}</pre>
-                        </div>`;
-                } else if (data.error) {
-                    logsDiv.innerHTML += `<div class="log error"><strong>Error:</strong> ${data.error}</div>`;
-                }
-            };
+    if (data.type === "image") {
+        logsDiv.innerHTML += `
+            <div class="log">
+                <strong>Image URL:</strong> <a href="${data.data}" target="_blank">${data.data}</a>
+                <img src="${data.data}" class="image" />
+            </div>`;
+    } else if (data.type === "metadata") {
+        logsDiv.innerHTML += `
+            <div class="log">
+                <strong>Metadata:</strong> <pre>${JSON.stringify(data.data, null, 2)}</pre>
+            </div>`;
+    } else if (data.type === "summary") {
+        logsDiv.innerHTML += `
+            <div class="log">
+                <strong>Summary:</strong> <pre>${JSON.stringify(data.data, null, 2)}</pre>
+            </div>`;
+    } else if (data.type === "event" && data.data === "All data generated") {
+        logsDiv.innerHTML += `<div class="log"><strong>Event:</strong> All data has been generated!</div>`;
+    } else if (data.error) {
+        logsDiv.innerHTML += `<div class="log error"><strong>Error:</strong> ${data.error}</div>`;
+    }
+};
 
             ws.onclose = () => {
                 logsDiv.innerHTML += `<div class="log">WebSocket disconnected.</div>`;
