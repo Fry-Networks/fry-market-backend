@@ -11,5 +11,4 @@ web3
 jinja2
 python-jwt
 pydantic
-base64
 botocore
