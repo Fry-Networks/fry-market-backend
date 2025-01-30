@@ -435,7 +435,9 @@ async def websocket_generate_images(websocket: WebSocket):
                                     try:
                                         description = json.loads(description)
                                     except json.JSONDecodeError as e:
-                                        await websocket.send_json({"error": f"Failed to parse JSON: {str(e)}"})
+                                        await websocket.send_json(
+                                            {"error": f"Failed to parse JSON description: {str(e)}"}
+                                        )
                                         continue
 
                                 if not isinstance(description, dict):
@@ -463,15 +465,15 @@ async def websocket_generate_images(websocket: WebSocket):
                                 all_metadata.append(metadata)
 
                                 # Send the image URL first
-                                await websocket.send_json({"type": "image", "data": image_url})
+                                await websocket.send_text(json.dumps({"type": "image", "data": image_url}))
 
                                 # Then send the metadata
-                                await websocket.send_json({"type": "metadata", "data": metadata})
+                                await websocket.send_text(json.dumps({"type": "metadata", "data": metadata}))
 
                             except Exception as e:
                                 error_message = f"Failed to process image: {str(e)}"
                                 print(error_message)
-                                await websocket.send_json({"error": error_message})
+                                await websocket.send_text(json.dumps({"error": error_message}))
 
                     except Exception as e:
                         # Handle specific moderation error
@@ -480,17 +482,17 @@ async def websocket_generate_images(websocket: WebSocket):
                         else:
                             error_message = f"Failed to process batch {batch_index + 1}: {str(e)}"
                         print(error_message)
-                        await websocket.send_json({"error": error_message})
+                        await websocket.send_text(json.dumps({"error": error_message}))
 
                 # Once all batches are processed, send a summary message
-                await websocket.send_json({"type": "summary", "data": all_metadata})
+                await websocket.send_text(json.dumps({"type": "summary", "data": all_metadata}))
 
                 # Send an event indicating all data is generated
-                await websocket.send_json({"type": "event", "data": "All data generated"})
+                await websocket.send_text(json.dumps({"type": "event", "data": "All data generated"}))
 
             except ValueError as e:
                 # Handle invalid JSON
-                await websocket.send_json({"error": f"Invalid JSON received: {str(e)}"})
+                await websocket.send_text(json.dumps({"error": f"Invalid JSON received: {str(e)}"}))
                 continue
 
     except Exception as e:
