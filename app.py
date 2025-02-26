@@ -544,7 +544,7 @@ async def upload_image(image: UploadFile = File(...)):
 async def create_collection(data: dict):
     # Extract data from the incoming request
     collection_name = data.get("collection_name")
-    collection_address = data.get("collection_address")
+    # collection_address = data.get("collection_address")
     wallet_address = data.get("wallet_address")
     listed_nfts = data.get("listed_nfts", [])
     image_url = data.get("image_url", "")
@@ -557,7 +557,6 @@ async def create_collection(data: dict):
 
     # Check if a collection with the same collection_address already exists for the same wallet_address
     existing_collection = nft_collection.find_one({
-        "collection_address": collection_address,
         "wallet_address": wallet_address
     })
 
@@ -567,7 +566,7 @@ async def create_collection(data: dict):
     # Prepare collection data to insert into the database
     collection_data = {
         "collection_name": collection_name,
-        "collection_address": collection_address,
+        # "collection_address": collection_address,
         "wallet_address": wallet_address,  # Link collection to wallet address
         "listed_nfts": listed_nfts,
         "image_url": image_url,
