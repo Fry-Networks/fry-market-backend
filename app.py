@@ -539,33 +539,60 @@ async def upload_image(image: UploadFile = File(...)):
     image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_file_name}"
     return {"url": image_url}
 
+# Create Collection API
 @app.post("/create-collection")
 async def create_collection(data: dict):
+    # Extract data from the incoming request
     collection_name = data.get("collection_name")
     collection_address = data.get("collection_address")
+    wallet_address = data.get("wallet_address")
     listed_nfts = data.get("listed_nfts", [])
     image_url = data.get("image_url", "")
     description = data.get("description", "")
-    royalty = data.get("royalty", 0)
+    royalty = data.get("royalty", 0.0)
 
-    if not collection_name or not collection_address:
-        raise HTTPException(status_code=400, detail="Collection name and address are required")
+    # Validate required fields
+    if not collection_name or not collection_address or not wallet_address:
+        raise HTTPException(status_code=400, detail="Collection name, address, and wallet address are required")
 
-    existing_collection = nft_collection.find_one({"collection_address": collection_address})
+    # Check if a collection with the same collection_address already exists for the same wallet_address
+    existing_collection = nft_collection.find_one({
+        "collection_address": collection_address,
+        "wallet_address": wallet_address
+    })
+
     if existing_collection:
-        raise HTTPException(status_code=400, detail="A collection with this address already exists")
+        raise HTTPException(status_code=400, detail="A collection with this address already exists for this wallet address")
 
+    # Prepare collection data to insert into the database
     collection_data = {
         "collection_name": collection_name,
         "collection_address": collection_address,
+        "wallet_address": wallet_address,  # Link collection to wallet address
         "listed_nfts": listed_nfts,
         "image_url": image_url,
         "description": description,
         "royalty": royalty
     }
 
+    # Insert collection data into the database
     result = nft_collection.insert_one(collection_data)
     return {"message": "Collection created", "collection_id": str(result.inserted_id)}
+
+# Get all collections for a specific wallet address API
+@app.get("/get-collections/{wallet_address}")
+async def get_collections(wallet_address: str):
+    # Fetch collections from the database associated with the given wallet_address
+    collections = list(nft_collection.find({"wallet_address": wallet_address}))
+
+    if not collections:
+        raise HTTPException(status_code=404, detail="No collections found for this wallet address")
+
+    # Convert ObjectId to string for serialization
+    for collection in collections:
+        collection['_id'] = str(collection['_id'])
+
+    return {"wallet_address": wallet_address, "collections": collections}
 
 @app.put("/update-collection/{collection_address}")
 async def update_collection(collection_address: str, data: dict):
