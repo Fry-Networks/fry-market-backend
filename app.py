@@ -546,7 +546,7 @@ async def create_collection(data: dict):
     collection_name = data.get("collection_name")
     # collection_address = data.get("collection_address")
     wallet_address = data.get("wallet_address")
-    listed_nfts = data.get("listed_nfts", [])
+    # listed_nfts = data.get("listed_nfts", [])
     image_url = data.get("image_url", "")
     description = data.get("description", "")
     royalty = data.get("royalty", 0.0)
@@ -568,7 +568,7 @@ async def create_collection(data: dict):
         "collection_name": collection_name,
         # "collection_address": collection_address,
         "wallet_address": wallet_address,  # Link collection to wallet address
-        "listed_nfts": listed_nfts,
+        # "listed_nfts": listed_nfts,
         "image_url": image_url,
         "description": description,
         "royalty": royalty
