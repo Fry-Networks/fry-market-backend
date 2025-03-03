@@ -538,26 +538,25 @@ async def upload_image(image: UploadFile = File(...)):
 
     image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_file_name}"
     return {"url": image_url}
-
-# Create Collection API
+    
 @app.post("/create-collection")
 async def create_collection(data: dict):
     # Extract data from the incoming request
     collection_name = data.get("collection_name")
-    # collection_address = data.get("collection_address")
+    collection_address = data.get("collection_address")
     wallet_address = data.get("wallet_address")
-    # listed_nfts = data.get("listed_nfts", [])
     image_url = data.get("image_url", "")
     description = data.get("description", "")
     royalty = data.get("royalty", 0.0)
 
     # Validate required fields
     if not collection_name or not collection_address or not wallet_address:
-        raise HTTPException(status_code=400, detail="Collection name, address, and wallet address are required")
+        raise HTTPException(status_code=400, detail="Collection name, collection address, and wallet address are required")
 
     # Check if a collection with the same collection_address already exists for the same wallet_address
     existing_collection = nft_collection.find_one({
-        "wallet_address": wallet_address
+        "wallet_address": wallet_address,
+        "collection_address": collection_address  # Ensure uniqueness per wallet
     })
 
     if existing_collection:
@@ -566,9 +565,8 @@ async def create_collection(data: dict):
     # Prepare collection data to insert into the database
     collection_data = {
         "collection_name": collection_name,
-        # "collection_address": collection_address,
+        "collection_address": collection_address,
         "wallet_address": wallet_address,  # Link collection to wallet address
-        # "listed_nfts": listed_nfts,
         "image_url": image_url,
         "description": description,
         "royalty": royalty
