@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, Header, Depends, Request , Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_socketio import SocketManager
@@ -29,6 +29,7 @@ from typing import List
 import time
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from bson.json_util import dumps
 
 
 # Load environment variables
@@ -784,6 +785,102 @@ def store_email(wallet_address: str = Form(...), email: str = Form(...)):
     email_data = {"wallet_address": wallet_address, "email": email}
     email_collection.insert_one(email_data)
     return JSONResponse(content={"message": "Success"}, status_code=201)
+
+
+
+# Ehtisham Code Start
+
+@app.put("/update-collection-nft/{collection_address}")
+async def update_collection_nft(collection_address: str, payload: dict = Body(...)):
+    add_nfts = payload.get("add_nfts", [])
+    print(collection_address)
+    
+    # Convert collection_address to ObjectId
+    try:
+        object_id = ObjectId(collection_address)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid collection ID")
+    
+    collection = nft_collection.find_one({"_id": object_id})
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    
+    # Convert each nft id in add_nfts to ObjectId and validate format
+    converted_ids = []
+    for nft_id in add_nfts:
+        try:
+            converted_ids.append(ObjectId(nft_id))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid NFT id: {nft_id}")
+    
+    # Check if all provided NFT IDs exist in the images collection
+    existing_images = list(image_collection.find({"_id": {"$in": converted_ids}}))
+    if len(existing_images) != len(converted_ids):
+        found_ids = {str(image["_id"]) for image in existing_images}
+        missing_ids = [nft_id for nft_id in add_nfts if nft_id not in found_ids]
+        raise HTTPException(status_code=404, detail={"error": "Some NFTs not found in images collection", "missing": missing_ids})
+    
+    # Get the current list of minted NFTs from the collection (if any)
+    listed_nfts = set(collection.get("minted_nfts", []))
+    
+    # Add the new NFT IDs (as strings)
+    listed_nfts.update(add_nfts)
+    
+    # Update the collection with the new list
+    nft_collection.update_one(
+        {"_id": object_id},
+        {"$set": {"minted_nfts": list(listed_nfts)}}
+    )
+    
+    return JSONResponse(content={"message": "Collection updated"}, status_code=200)
+    
+    
+
+@app.get("/collection-nfts/{collection_id}")
+async def get_collection_nfts(collection_id: str):
+    # Convert the collection_id parameter to an ObjectId
+    try:
+        object_id = ObjectId(collection_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid collection ID")
+    
+    # Find the collection by its _id
+    collection = nft_collection.find_one({"_id": object_id})
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    
+    # Get the list of minted NFT IDs from the collection
+    minted_nfts = collection.get("minted_nfts", [])
+    
+    # Convert each NFT id string to an ObjectId
+    try:
+        nft_ids = [ObjectId(nft_id) for nft_id in minted_nfts]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Invalid NFT IDs in collection")
+    
+    # Query the images collection for documents whose _id is in nft_ids
+    nft_data = list(image_collection.find({"_id": {"$in": nft_ids}}))
+    
+    # Return the data as JSON using dumps to handle ObjectIds properly
+    return JSONResponse(content=json.loads(dumps(nft_data)), media_type="application/json", status_code=200)
+
+@app.get("/collection-details-by-nft/{nft_id}")
+async def get_collection_details_by_nft(nft_id: str):
+    # Find the collection document where minted_nfts contains the given nft_id
+    collection = nft_collection.find_one({"minted_nfts": nft_id})
+    
+    if not collection:
+        raise HTTPException(status_code=404, detail="Collection not found")
+    
+    # Use dumps to serialize the document (handles ObjectId, dates, etc.)
+    serialized = dumps(collection)
+    # Convert the JSON string to a Python dict before returning
+    return JSONResponse(
+        content=json.loads(serialized),
+        status_code=200,
+    )
+
+
 
 if __name__ == "__main__":
     import uvicorn
