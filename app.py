@@ -208,7 +208,10 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
         for i, image in enumerate(data["artifacts"]):
             image_idx = request_idx * images_per_request + i
             nft_name = generate_nft_name(text_prompt, image_idx + 1)  # Generate unique name for each NFT (e.g., "Football #1")
-            s3_key = f"AI/{nft_name}.png"  # Image file name
+
+            image_name = f"image_{image_idx}"
+            s3_key = f"AI/{image_name}"
+
             image_data = base64.b64decode(image["base64"])
             image_url, unique_name = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
             image_urls.append(image_url)
