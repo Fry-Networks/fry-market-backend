@@ -812,11 +812,11 @@ async def update_collection_nft(collection_address: str, payload: dict = Body(..
             raise HTTPException(status_code=400, detail=f"Invalid NFT id: {nft_id}")
     
     # Check if all provided NFT IDs exist in the images collection
-    existing_images = list(image_collection.find({"_id": {"$in": converted_ids}}))
-    if len(existing_images) != len(converted_ids):
-        found_ids = {str(image["_id"]) for image in existing_images}
-        missing_ids = [nft_id for nft_id in add_nfts if nft_id not in found_ids]
-        raise HTTPException(status_code=404, detail={"error": "Some NFTs not found in images collection", "missing": missing_ids})
+    # existing_images = list(image_collection.find({"_id": {"$in": converted_ids}}))
+    # if len(existing_images) != len(converted_ids):
+    #     found_ids = {str(image["_id"]) for image in existing_images}
+    #     missing_ids = [nft_id for nft_id in add_nfts if nft_id not in found_ids]
+    #     raise HTTPException(status_code=404, detail={"error": "Some NFTs not found in images collection", "missing": missing_ids})
     
     # Get the current list of minted NFTs from the collection (if any)
     listed_nfts = set(collection.get("minted_nfts", []))
