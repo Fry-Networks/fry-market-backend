@@ -229,14 +229,17 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
         for i, image in enumerate(data["artifacts"]):
             image_idx = request_idx * images_per_request + i
             nft_name = generate_nft_name(text_prompt, image_idx + 1)  # Generate unique name for each NFT
-            s3_key = f"AI/{nft_name}.png"
 
+            s3_key = f"AI/{nft_name}.png"  # Image file name
             image_data = base64.b64decode(image["base64"])
             image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
             image_urls.append(image_url)
 
-    return image_urls
+            # Ensure the metadata uses the same name
+            metadata_s3_key = f"AI/{nft_name}.json"  # Metadata file name
+            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)  # This should be uploaded with the same name
 
+    return image_urls
 
 async def generate_image_description(image_url: str, prompt: str, index: int) -> dict:
     """
@@ -310,7 +313,6 @@ async def generate_image_description(image_url: str, prompt: str, index: int) ->
     except Exception as e:
         print(f"Unexpected error: {e}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
-
     
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
     s3_client = boto3.client('s3')
@@ -364,7 +366,7 @@ async def generate_images_route(request: Request):
             image_responses.append({
                 "name": metadata.get("name"),
                 "image": image_url,
-                "metadata": metadata_url
+                "metadata": metadata_url  # Ensure both metadata and image URLs are named the same
             })
 
         return {"image_responses": image_responses}
