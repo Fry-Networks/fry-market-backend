@@ -809,7 +809,7 @@ async def update_collection_nft(collection_address: str, payload: dict = Body(..
     converted_ids = []
     for nft_id in add_nfts:
         try:
-            converted_ids.append(ObjectId(nft_id))
+            converted_ids.append(nft_id)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid NFT id: {nft_id}")
     
