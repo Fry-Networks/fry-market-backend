@@ -235,41 +235,38 @@ async def generate_image_description(image_url: str) -> dict:
     """
     print(f"Generating description for image: {image_url}")
     prompt = f"""
-    You are required to provide the response in a specific JSON format.
-    The fields required are as follows:
-    - "name": a unique identifier for the character, based on its appearance and attributes
-    - "extra": an empty dictionary
-    - "image": the provided image URL
-    - "standard": set to "arc3"
-    - "properties": a dictionary containing attributes like "Eyes", "Skin", "Tail", "Mouth", "Eyewear", "Special", "Headgear", and "Background"
-    - "description": a brief character description
-    - "image_mime_type": a string representing the image MIME type (e.g., "image/png")
-    - "extra_properties": an empty dictionary
+        You are required to provide the response in a specific JSON format.
+        The fields required are as follows:
+        - "name": a unique identifier for the character
+        - "extra": an empty dictionary
+        - "image": the provided image URL
+        - "standard": set to "arc3"
+        - "properties": a dictionary containing attributes like "Eyes", "Skin", "Tail", "Mouth", "Eyewear", "Special", "Headgear", and "Background"
+        - "description": a brief character description
+        - "image_mime_type": a string representing the image MIME type (e.g., "image/png")
+        - "extra_properties": an empty dictionary
 
-    Carefully analyze the provided image and generate a unique, fitting name for the character based on its appearance.
-
-    Use the following format for your response:
-    {{
-        "name": "A unique name that describes the character",
-        "extra": {{}},
-        "image": "{image_url}",
-        "standard": "arc3",
-        "properties": {{
-            "Eyes": "Glaring",
-            "Skin": "Breeze",
-            "Tail": "None",
-            "Mouth": "None",
-            "Eyewear": "None",
-            "Special": "None",
-            "Headgear": "Leafs",
-            "Background": "Softy"
-        }},
-        "description": "Character description here",
-        "image_mime_type": "image/png",
-        "extra_properties": {{}}
-    }}
-"""
-
+        Use the following format for your response:
+        {{
+            "name": "Character Name",
+            "extra": {{}},
+            "image": "{image_url}",
+            "standard": "arc3",
+            "properties": {{
+                "Eyes": "Glaring",
+                "Skin": "Breeze",
+                "Tail": "None",
+                "Mouth": "None",
+                "Eyewear": "None",
+                "Special": "None",
+                "Headgear": "Leafs",
+                "Background": "Softy"
+            }},
+            "description": "Character description here",
+            "image_mime_type": "image/png",
+            "extra_properties": {{}}
+        }}
+    """
     print(prompt)
 
     try:
@@ -788,8 +785,6 @@ def store_email(wallet_address: str = Form(...), email: str = Form(...)):
     email_data = {"wallet_address": wallet_address, "email": email}
     email_collection.insert_one(email_data)
     return JSONResponse(content={"message": "Success"}, status_code=201)
-
-
 
 # Ehtisham Code Start
 
