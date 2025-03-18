@@ -786,8 +786,6 @@ def store_email(wallet_address: str = Form(...), email: str = Form(...)):
     email_collection.insert_one(email_data)
     return JSONResponse(content={"message": "Success"}, status_code=201)
 
-
-
 # Ehtisham Code Start
 
 @app.put("/update-collection-nft/{collection_address}")
