@@ -175,21 +175,6 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
     except Exception as e:
         raise Exception(f"Failed to upload file: {str(e)}")
 
-def generate_nft_name(prompt, index):
-    """
-    Generate a unique NFT name based on the prompt and the index.
-
-    Args:
-        prompt (str): The text prompt to generate the name from.
-        index (int): The index of the current NFT image (starting from 1).
-
-    Returns:
-        str: The generated NFT name.
-    """
-    # Strip any spaces, and add an index for uniqueness
-    name_base = prompt.split()[0]  # Get the first word of the prompt
-    return f"{name_base} #{index}"
-
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
     images_per_request = 10
     num_requests = (num_images + images_per_request - 1) // images_per_request
@@ -228,66 +213,67 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
 
         for i, image in enumerate(data["artifacts"]):
             image_idx = request_idx * images_per_request + i
-            nft_name = generate_nft_name(text_prompt, image_idx + 1)  # Generate unique name for each NFT
+            image_name = f"image_{image_idx}"
+            s3_key = f"AI/{image_name}"
 
-            s3_key = f"AI/{nft_name}.png"  # Image file name
             image_data = base64.b64decode(image["base64"])
             image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
             image_urls.append(image_url)
 
-            # Ensure the metadata uses the same name
-            metadata_s3_key = f"AI/{nft_name}.json"  # Metadata file name
-            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)  # This should be uploaded with the same name
-
     return image_urls
 
-async def generate_image_description(image_url: str, prompt: str, index: int) -> dict:
+# Function to generate image description using GPT
+async def generate_image_description(image_url: str) -> dict:
     """
-    Generates a detailed JSON description for the provided image URL using GPT, 
-    including a unique name based on the prompt and the index.
+    Generates a detailed JSON description for the provided image URL using GPT.
 
     Args:
         image_url (str): The URL of the image.
-        prompt (str): The prompt used to generate the image.
-        index (int): The index of the current image for naming purposes.
 
     Returns:
         dict: The generated description in a structured JSON format.
     """
     print(f"Generating description for image: {image_url}")
-    
-    # Generate the unique NFT name based on prompt and index
-    nft_name = generate_nft_name(prompt, index)
+    prompt = f"""
+        You are required to provide the response in a specific JSON format.
+        The fields required are as follows:
+        - "name": a unique identifier for the character
+        - "extra": an empty dictionary
+        - "image": the provided image URL
+        - "standard": set to "arc3"
+        - "properties": a dictionary containing attributes like "Eyes", "Skin", "Tail", "Mouth", "Eyewear", "Special", "Headgear", and "Background"
+        - "description": a brief character description
+        - "image_mime_type": a string representing the image MIME type (e.g., "image/png")
+        - "extra_properties": an empty dictionary
 
-    prompt_text = f"""
-    You are required to provide the response in a specific JSON format.
-    The fields required are as follows:
-    - "name": "{nft_name}"
-    - "extra": {{}}
-    - "image": "{image_url}"
-    - "standard": "arc3"
-    - "properties": {{
-        "Eyes": "Glaring",
-        "Skin": "Breeze",
-        "Tail": "None",
-        "Mouth": "None",
-        "Eyewear": "None",
-        "Special": "None",
-        "Headgear": "Leafs",
-        "Background": "Softy"
-    }}
-    - "description": "Character description here"
-    - "image_mime_type": "image/png"
-    - "extra_properties": {{}}
+        Use the following format for your response:
+        {{
+            "name": "Character Name",
+            "extra": {{}},
+            "image": "{image_url}",
+            "standard": "arc3",
+            "properties": {{
+                "Eyes": "Glaring",
+                "Skin": "Breeze",
+                "Tail": "None",
+                "Mouth": "None",
+                "Eyewear": "None",
+                "Special": "None",
+                "Headgear": "Leafs",
+                "Background": "Softy"
+            }},
+            "description": "Character description here",
+            "image_mime_type": "image/png",
+            "extra_properties": {{}}
+        }}
     """
-
-    print(prompt_text)
+    print(prompt)
 
     try:
         # Call OpenAI GPT-4 for generating description
         response = openai.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "user", "content": prompt_text}],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=2000,
         )
 
@@ -337,27 +323,40 @@ async def generate_images_route(request: Request):
         image_urls = generate_images(num_images, prompt, style)
         image_responses = []
 
-        for idx, image_url in enumerate(image_urls, start=1):
-            description = await generate_image_description(image_url, prompt, idx)
+        for image_url in image_urls:
+            description = generate_image_description(image_url)
 
-            if not description or not isinstance(description, dict):
+            if not description or not isinstance(description, str):
                 raise HTTPException(status_code=400, detail="Invalid image description generated.")
 
-            metadata = {
-                "wallet_address": wallet_address,
-                "image": image_url,
-                "name": description.get("name"),
-                "extra": description.get("extra", {}),
-                "standard": description.get("standard"),
-                "properties": description.get("properties", {}),
-                "description": description.get("description"),
-                "image_mime_type": description.get("image_mime_type"),
-                "extra_properties": description.get("extra_properties", {}),
-                "prompt": prompt,
-                "style": style,
-            }
+            cleaned_description = re.sub(r'//|\\n', '', description)
 
-            metadata_s3_key = f"AI/{description.get('name')}.json"
+            try:
+                description_json = json.loads(cleaned_description)
+
+                metadata = {
+                    "wallet_address": wallet_address,
+                    "image": image_url,
+                    "name": description_json.get("name"),
+                    "extra": description_json.get("extra", {}),
+                    "standard": description_json.get("standard"),
+                    "properties": description_json.get("properties", {}),
+                    "description": description_json.get("description"),
+                    "image_mime_type": description_json.get("image_mime_type"),
+                    "extra_properties": description_json.get("extra_properties", {}),
+                    "prompt": prompt,
+                    "style": style,
+                }
+            except json.JSONDecodeError:
+                metadata = {
+                    "wallet_address": wallet_address,
+                    "image": image_url,
+                    "description": cleaned_description,
+                    "prompt": prompt,
+                    "style": style,
+                }
+
+            metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
             # Save metadata to MongoDB
@@ -366,7 +365,7 @@ async def generate_images_route(request: Request):
             image_responses.append({
                 "name": metadata.get("name"),
                 "image": image_url,
-                "metadata": metadata_url  # Ensure both metadata and image URLs are named the same
+                "metadata": metadata_url
             })
 
         return {"image_responses": image_responses}
