@@ -865,7 +865,7 @@ async def get_collection_nfts(collection_id: str):
 @app.get("/collection-details-by-nft/{nft_id}")
 async def get_collection_details_by_nft(nft_id: str):
     # Find the collection document where minted_nfts contains the given nft_id
-    collection = nft_collection.find_one({"minted_nfts": nft_id})
+    collection = nft_collection.find_one({"minted_nfts": int(nft_id)})
     
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
