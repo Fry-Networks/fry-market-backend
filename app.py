@@ -176,52 +176,51 @@ def upload_to_s3(file, bucket_name, folder_name="AI"):
         raise Exception(f"Failed to upload file: {str(e)}")
 
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
+    image_urls = []
+    full_prompt = f"Generate an image of {text_prompt}, in {style} style" if style else text_prompt
+
+    # Calculate number of API calls needed (OpenAI allows max 10 images per request)
     images_per_request = 10
     num_requests = (num_images + images_per_request - 1) // images_per_request
-    image_urls = []
-
-    full_prompt = f"Generate an image of {text_prompt}, in {style} style" if style else text_prompt
 
     for request_idx in range(num_requests):
         samples = min(images_per_request, num_images - request_idx * images_per_request)
 
-        response = requests.post(
-            f"{api_host}/v1/generation/{engine_id}/text-to-image",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Authorization": f"Bearer {api_key}"
-            },
-            json={
-                "text_prompts": [
-                    {
-                        "text": full_prompt
-                    }
-                ],
-                "cfg_scale": 7,
-                "height": 1024,
-                "width": 1024,
-                "samples": samples,
-                "steps": 30,
-            },
-        )
+        try:
+            response = requests.post(
+                "https://api.openai.com/v1/images/generations",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {openai_api_key}"
+                },
+                json={
+                    "model": "dall-e-3",  # or "dall-e-2" depending on your needs
+                    "prompt": full_prompt,
+                    "n": samples,
+                    "size": "1024x1024",
+                    "response_format": "b64_json"
+                }
+            )
 
-        if response.status_code != 200:
-            raise Exception("Non-200 response: " + str(response.text))
+            if response.status_code != 200:
+                raise Exception("Non-200 response: " + str(response.text))
 
-        data = response.json()
+            data = response.json()
 
-        for i, image in enumerate(data["artifacts"]):
-            image_idx = request_idx * images_per_request + i
-            image_name = f"image_{image_idx}"
-            s3_key = f"AI/{image_name}"
+            for i, image in enumerate(data["data"]):
+                image_idx = request_idx * images_per_request + i
+                image_name = f"image_{image_idx}"
+                s3_key = f"AI/{image_name}"
 
-            image_data = base64.b64decode(image["base64"])
-            image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
-            image_urls.append(image_url)
+                image_data = base64.b64decode(image["b64_json"])
+                image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
+                image_urls.append(image_url)
+
+        except Exception as e:
+            print(f"Error generating images: {str(e)}")
+            raise
 
     return image_urls
-
 # Function to generate image description using GPT
 async def generate_image_description(image_url: str) -> dict:
     """
