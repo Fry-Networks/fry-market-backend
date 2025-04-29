@@ -194,19 +194,18 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                     "Authorization": f"Bearer {openai_api_key}"
                 },
                 json={
-                    "model": "dall-e-3",  # or "dall-e-2" depending on your needs
+                    "model": "gpt-image-1",  # or "dall-e-2" depending on your needs
                     "prompt": full_prompt,
                     "n": samples,
                     "size": "1024x1024",
-                    "response_format": "b64_json"
+                    # "response_format": "b64_json"
                 }
             )
 
             if response.status_code != 200:
                 raise Exception("Non-200 response: " + str(response.text))
-
             data = response.json()
-
+            print("data",data)
             for i, image in enumerate(data["data"]):
                 image_idx = request_idx * images_per_request + i
                 image_name = f"image_{image_idx}"
