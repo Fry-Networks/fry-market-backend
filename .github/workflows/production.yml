@@ -32,7 +32,6 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-
   test:
     runs-on: ubuntu-latest
     needs: setup
@@ -45,7 +44,6 @@ jobs:
           else
             echo "No test cases file found"
           fi
-
   deploy:
     runs-on: ubuntu-latest
     needs: test
@@ -121,7 +119,6 @@ jobs:
           sudo nginx -t
           sudo systemctl restart nginx
           sudo systemctl status nginx
-
   notify:
     runs-on: ubuntu-latest
     needs: nginx-config
