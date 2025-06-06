@@ -54,10 +54,8 @@ jobs:
           # Write private key to file
           echo "$SSH_PRIVATE_KEY" > ./deploy_key
           chmod 600 ./deploy_key
-
           # Copy private key to remote server
           scp -o StrictHostKeyChecking=no -i ./deploy_key ./deploy_key $SSH_USERNAME@$HOST_IP:~/.ssh/fry_backend
-
           ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << 'EOF'
 set -e
 
