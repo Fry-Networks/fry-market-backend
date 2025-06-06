@@ -35,7 +35,7 @@ jobs:
         run: |
           echo "Running tests..."
           if [ -f "test_cases.py" ]; then
-            python test_cases.py
+            python3 test_cases.py
           else
             echo "No test cases file found"
           fi
@@ -51,68 +51,72 @@ jobs:
     steps:
       - name: Copy SSH private key and deploy
         run: |
-          # Create a temp private key file on runner
+          # Write private key to file
           echo "$SSH_PRIVATE_KEY" > ./deploy_key
           chmod 600 ./deploy_key
 
-          # Copy private key to server
+          # Copy private key to remote server
           scp -o StrictHostKeyChecking=no -i ./deploy_key ./deploy_key $SSH_USERNAME@$HOST_IP:~/.ssh/fry_backend
 
           ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << 'EOF'
-            set -e
-            echo "Setting permissions for deploy key"
-            chmod 600 ~/.ssh/fry_backend
+set -e
 
-            echo "Creating SSH config for GitHub"
-            cat > ~/.ssh/config <<EOC
+echo "Setting permissions for deploy key"
+chmod 600 ~/.ssh/fry_backend
+
+echo "Creating SSH config for GitHub"
+cat > ~/.ssh/config << 'EOC'
 Host github.com
   HostName github.com
   User git
   IdentityFile ~/.ssh/fry_backend
   IdentitiesOnly yes
 EOC
-            chmod 600 ~/.ssh/config
 
-            echo "Adding GitHub to known_hosts"
-            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+chmod 600 ~/.ssh/config
 
-            echo "Starting deployment..."
+echo "Adding GitHub to known_hosts"
+ssh-keyscan -H github.com >> ~/.ssh/known_hosts
 
-            if [ ! -d "$TARGET_DIR/.git" ]; then
-              echo "Cloning repository..."
-              rm -rf "$TARGET_DIR"
-              mkdir -p "$TARGET_DIR"
-              git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
-            else
-              echo "Fetching latest changes..."
-              git -C "$TARGET_DIR" remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
-              git -C "$TARGET_DIR" fetch origin main
-              git -C "$TARGET_DIR" reset --hard origin/main
-            fi
+echo "Starting deployment..."
 
-            echo "Files in $TARGET_DIR:"
-            ls -la "$TARGET_DIR"
+if [ ! -d "$TARGET_DIR/.git" ]; then
+  echo "Cloning repository..."
+  rm -rf "$TARGET_DIR"
+  mkdir -p "$TARGET_DIR"
+  git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
+else
+  echo "Fetching latest changes..."
+  git -C "$TARGET_DIR" remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
+  git -C "$TARGET_DIR" fetch origin main
+  git -C "$TARGET_DIR" reset --hard origin/main
+fi
 
-            if [ ! -d "$TARGET_DIR/myenv" ]; then
-              echo "Creating virtual environment..."
-              python3.11 -m venv "$TARGET_DIR/myenv"
-            fi
-            source "$TARGET_DIR/myenv/bin/activate"
+echo "Files in $TARGET_DIR:"
+ls -la "$TARGET_DIR"
 
-            if [ -f "$TARGET_DIR/requirements.txt" ]; then
-              pip install --upgrade pip
-              pip install -r "$TARGET_DIR/requirements.txt"
-            else
-              echo "No requirements.txt found"
-              exit 1
-            fi
+if [ ! -d "$TARGET_DIR/myenv" ]; then
+  echo "Creating virtual environment..."
+  python3.11 -m venv "$TARGET_DIR/myenv"
+fi
 
-            pip cache purge
+source "$TARGET_DIR/myenv/bin/activate"
 
-            sudo systemctl daemon-reload
-            sudo systemctl restart fry-backend.service
-            sudo systemctl status fry-backend.service
-          EOF
+if [ -f "$TARGET_DIR/requirements.txt" ]; then
+  pip install --upgrade pip
+  pip install -r "$TARGET_DIR/requirements.txt"
+else
+  echo "No requirements.txt found"
+  exit 1
+fi
+
+pip cache purge
+
+sudo systemctl daemon-reload
+sudo systemctl restart fry-backend.service
+sudo systemctl status fry-backend.service
+
+EOF
 
           rm -f ./deploy_key
         shell: bash
