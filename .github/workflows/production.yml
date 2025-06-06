@@ -3,7 +3,7 @@ name: Deploy fry-foundation to Production server
 on:
   push:
     branches:
-      - main  
+      - main
 
 jobs:
   setup:
@@ -58,7 +58,7 @@ jobs:
           # Copy private key to server
           scp -o StrictHostKeyChecking=no -i ./deploy_key ./deploy_key $SSH_USERNAME@$HOST_IP:~/.ssh/fry_backend
 
-          ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << EOF
+          ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << 'EOF'
             set -e
             echo "Setting permissions for deploy key"
             chmod 600 ~/.ssh/fry_backend
