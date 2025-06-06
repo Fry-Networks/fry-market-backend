@@ -70,8 +70,8 @@ image_collection = db['images']  # Create/Use the 'images' collection
 # S3 setup
 s3_client = boto3.client(
         's3',
-        aws_access_key_id='REDACTED_ROTATE_ME',
-        aws_secret_access_key='/+KDVga0b2gCjnukWeOFiUF01jMZlJH/D0wadnPA'
+        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 # OpenAI setup
 openai.api_key = openai_api_key
