@@ -57,64 +57,62 @@ jobs:
           # Copy private key to remote server
           scp -o StrictHostKeyChecking=no -i ./deploy_key ./deploy_key $SSH_USERNAME@$HOST_IP:~/.ssh/fry_backend
           ssh -o StrictHostKeyChecking=no $SSH_USERNAME@$HOST_IP << 'EOF'
-set -e
+            set -e
+            echo "Setting permissions for deploy key"
+            chmod 600 ~/.ssh/fry_backend
 
-echo "Setting permissions for deploy key"
-chmod 600 ~/.ssh/fry_backend
+            echo "Creating SSH config for GitHub"
+            cat > ~/.ssh/config << 'EOC'
+            Host github.com
+              HostName github.com
+              User git
+              IdentityFile ~/.ssh/fry_backend
+              IdentitiesOnly yes
+            EOC
 
-echo "Creating SSH config for GitHub"
-cat > ~/.ssh/config << 'EOC'
-Host github.com
-  HostName github.com
-  User git
-  IdentityFile ~/.ssh/fry_backend
-  IdentitiesOnly yes
-EOC
+            chmod 600 ~/.ssh/config
 
-chmod 600 ~/.ssh/config
+            echo "Adding GitHub to known_hosts"
+            ssh-keyscan -H github.com >> ~/.ssh/known_hosts
 
-echo "Adding GitHub to known_hosts"
-ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            echo "Starting deployment..."
 
-echo "Starting deployment..."
+            if [ ! -d "$TARGET_DIR/.git" ]; then
+              echo "Cloning repository..."
+              rm -rf "$TARGET_DIR"
+              mkdir -p "$TARGET_DIR"
+              git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
+            else
+              echo "Fetching latest changes..."
+              git -C "$TARGET_DIR" remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
+              git -C "$TARGET_DIR" fetch origin main
+              git -C "$TARGET_DIR" reset --hard origin/main
+            fi
 
-if [ ! -d "$TARGET_DIR/.git" ]; then
-  echo "Cloning repository..."
-  rm -rf "$TARGET_DIR"
-  mkdir -p "$TARGET_DIR"
-  git clone git@github.com:Fry-Foundation/fry-market-backend.git "$TARGET_DIR"
-else
-  echo "Fetching latest changes..."
-  git -C "$TARGET_DIR" remote set-url origin git@github.com:Fry-Foundation/fry-market-backend.git
-  git -C "$TARGET_DIR" fetch origin main
-  git -C "$TARGET_DIR" reset --hard origin/main
-fi
+            echo "Files in $TARGET_DIR:"
+            ls -la "$TARGET_DIR"
 
-echo "Files in $TARGET_DIR:"
-ls -la "$TARGET_DIR"
+            if [ ! -d "$TARGET_DIR/myenv" ]; then
+              echo "Creating virtual environment..."
+              python3.11 -m venv "$TARGET_DIR/myenv"
+            fi
 
-if [ ! -d "$TARGET_DIR/myenv" ]; then
-  echo "Creating virtual environment..."
-  python3.11 -m venv "$TARGET_DIR/myenv"
-fi
+            source "$TARGET_DIR/myenv/bin/activate"
 
-source "$TARGET_DIR/myenv/bin/activate"
+            if [ -f "$TARGET_DIR/requirements.txt" ]; then
+              pip install --upgrade pip
+              pip install -r "$TARGET_DIR/requirements.txt"
+            else
+              echo "No requirements.txt found"
+              exit 1
+            fi
 
-if [ -f "$TARGET_DIR/requirements.txt" ]; then
-  pip install --upgrade pip
-  pip install -r "$TARGET_DIR/requirements.txt"
-else
-  echo "No requirements.txt found"
-  exit 1
-fi
+            pip cache purge
 
-pip cache purge
-
-sudo systemctl daemon-reload
-sudo systemctl restart fry-backend.service
-sudo systemctl status fry-backend.service
-
-EOF
+            sudo systemctl daemon-reload
+            sudo systemctl restart fry-backend.service
+            sudo systemctl status fry-backend.service
+          EOF
 
           rm -f ./deploy_key
         shell: bash
