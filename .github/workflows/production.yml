@@ -15,21 +15,22 @@ jobs:
         
       - name: Stop and Remove Existing Container (if running)
         run: |
-          CONTAINER_ID=$(docker ps -q --filter "name=fry-network-backend")
-          if [ ! -z "$CONTAINER_ID" ]; then
-            echo "Stopping and removing existing backend container..."
-            sudo docker stop fry-network-backend
-            sudo docker rm fry-network-backend
-          else
-            echo "No existing backend container found!"
-          fi
+             echo "$SUDO_PASSWORD" | sudo -S docker ps -q --filter "name=fry-network-backend"
+             CONTAINER_ID=$(sudo docker ps -q --filter "name=fry-network-backend")
+             if [ ! -z "$CONTAINER_ID" ]; then
+             echo "Stopping and removing existing backend container..."
+             docker stop fry-network-backend
+             docker rm fry-network-backend
+             else
+              echo "No existing backend container found!"
+             fi
 
   
 
       - name: Build & Run Docker Container
         run: |
           # Navigate to project directory
-          cd/home/actionsuser/production_Env/actions-runner-prod || { echo "Project folder not found!"; exit 1; }
+          cd /home/actionsuser/production_Env/actions-runner-prod/fry-network/fry-market-backend/fry-market-backend || { echo "Project folder not found!"; exit 1; }
      
 
       - name: Build Docker image and run container
