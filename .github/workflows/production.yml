@@ -18,8 +18,8 @@ jobs:
           CONTAINER_ID=$(docker ps -q --filter "name=fry-network-backend")
           if [ ! -z "$CONTAINER_ID" ]; then
             echo "Stopping and removing existing backend container..."
-            docker stop fry-network-backend
-            docker rm fry-network-backend
+            sudo docker stop fry-network-backend
+            sudo docker rm fry-network-backend
           else
             echo "No existing backend container found!"
           fi
