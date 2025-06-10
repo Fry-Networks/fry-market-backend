@@ -34,8 +34,8 @@ jobs:
 
       - name: Build Docker image and run container
         run: |
-            sudo docker build -t fry-network  .
-            sudo docker run -d -p 6000:6000 --name=fry-network-backend fry-network
+             docker build -t fry-network  .
+             docker run -d -p 6000:6000 --name=fry-network-backend fry-network
 
 
           
