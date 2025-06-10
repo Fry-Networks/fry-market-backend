@@ -12,19 +12,17 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
+        
       - name: Stop and Remove Existing Container (if running)
         run: |
-           echo "$SUDO_PASSWORD" | sudo -S docker ps -q --filter "name=fry-network-backend"
-           CONTAINER_ID=$(sudo docker ps -q --filter "name=fry-network-backend")
-           if [ ! -z "$CONTAINER_ID" ]; then
+          CONTAINER_ID=$(docker ps -q --filter "name=fry-network-backend")
+          if [ ! -z "$CONTAINER_ID" ]; then
             echo "Stopping and removing existing backend container..."
-            sudo docker stop fry-network-backend
-            sudo docker rm fry-network-backend
-
-           else
+            docker stop fry-network-backend
+            docker rm fry-network-backend
+          else
             echo "No existing backend container found!"
-           fi
+          fi
 
   
 
