@@ -46,12 +46,7 @@ jobs:
           echo "Running as: $(whoami)"
           sudo -l
 
-      - name: Test nginx config
+      - name: Reload Nginx via Script
         run: |
-          echo "Checking nginx config..."
-          sudo -n -- /usr/sbin/nginx -t || { echo '❌ Nginx test failed due to sudo permissions'; exit 1; } 
-
-      - name: Restart nginx
-        run: |
-          echo "Restarting nginx..."
-          sudo -n -- /bin/systemctl restart nginx || { echo '❌ Failed to restart nginx due to sudo permissions'; exit 1; }
+          echo "Testing and restarting nginx via root-owned script..."
+          sudo -n /usr/local/bin/reload_nginx.sh || { echo '❌ Script failed'; exit 1; }
