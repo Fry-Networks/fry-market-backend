@@ -49,9 +49,9 @@ jobs:
       - name: Test nginx config
         run: |
           echo "Checking nginx config..."
-          sudo -n -- /usr/sbin/nginx -t || { echo '❌ Nginx test failed due to sudo permissions'; exit 1; } 
+          sudo -n /usr/sbin/nginx -t || { echo '❌ Nginx test failed due to sudo permissions'; exit 1; } 
 
       - name: Restart nginx
         run: |
           echo "Restarting nginx..."
-          sudo -n -- /bin/systemctl restart nginx || { echo '❌ Failed to restart nginx due to sudo permissions'; exit 1; }
+          sudo -n /bin/systemctl restart nginx || { echo '❌ Failed to restart nginx due to sudo permissions'; exit 1; }
