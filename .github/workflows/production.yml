@@ -41,7 +41,7 @@ jobs:
     needs: deploy
     steps:
       - name: Test nginx config
-        run: sudo -n /usr/sbin/nginx -t
+        run: bash -c "sudo -n /usr/sbin/nginx -t"
 
       - name: Restart nginx
-        run: sudo -n /bin/systemctl restart nginx
+        run: bash -c "sudo -n /bin/systemctl restart nginx"
