@@ -4,29 +4,15 @@ on:
   push:
     branches:
       - main
-
+      
 jobs:
   deploy:
-    runs-on: self-hosted  # Run on self-hosted runner
+    runs-on: self-hosted
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Whoami & Sudo Permissions Check
-        run: |
-          echo "Running as user: $(whoami)"
-          echo "Checking sudo permissions:"
-          sudo -l || echo "⚠️ Sudo check failed"
-
-      - name: Check if Running Inside Docker
-        run: |
-          if grep -qE '/docker/' /proc/1/cgroup; then
-            echo "⚠️ This runner is running inside Docker!"
-          else
-            echo "✅ This runner is running on the host directly"
-          fi
-
+        
       - name: Stop and Remove Existing Container (if running)
         run: |
           CONTAINER_ID=$(docker ps -q --filter "name=fry-network-backend")
@@ -40,10 +26,10 @@ jobs:
 
       - name: Build & Run Docker Container
         run: |
-          cd /home/actionsuser/production_Env/actions-runner-prod/fry-network/fry-market-backend/fry-market-backend || { echo "❌ Project folder not found!"; exit 1; }
-          docker build -t fry-network .
+          cd /home/actionsuser/production_Env/actions-runner-prod/fry-network/fry-market-backend/fry-market-backend || { echo "Project folder not found!"; exit 1; }
+          docker build -t fry-network  .
           docker run -d -p 6000:6000 --name=fry-network-backend fry-network
-
+          
       - name: Cleanup Old Docker Images
         run: |
           echo "Removing old unused Docker images..."
@@ -55,14 +41,12 @@ jobs:
     needs: deploy
 
     steps:
-      - name: Whoami & Sudo Permissions Check (nginx job)
-        run: |
-          echo "Running as user: $(whoami)"
-          echo "Checking sudo permissions:"
-          sudo -l || echo "⚠️ Sudo check failed in nginx job"
-
       - name: Test nginx config
-        run: bash -c "sudo -n /usr/sbin/nginx -t || { echo '❌ Nginx test failed due to sudo issues'; exit 1; }"
+        run: |
+          echo "Checking nginx config..."
+          bash -c "sudo -n /usr/sbin/nginx -t || { echo '❌ Nginx test failed due to sudo permissions'; exit 1; }"
 
       - name: Restart nginx
-        run: bash -c "sudo -n /bin/systemctl restart nginx || { echo '❌ Failed to restart nginx'; exit 1; }"
+        run: |
+          echo "Restarting nginx..."
+          bash -c "sudo -n /bin/systemctl restart nginx || { echo '❌ Failed to restart nginx due to sudo permissions'; exit 1; }"
