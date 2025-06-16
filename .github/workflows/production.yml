@@ -53,5 +53,8 @@ jobs:
     steps:
       - name: Nginx Configuration
         run: |
-             sudo nginx -t
-             sudo systemctl restart nginx
+             - name: Test nginx config
+               run: sudo -n /usr/sbin/nginx -t
+
+             - name: Restart nginx
+               run: sudo -n /bin/systemctl restart nginx
