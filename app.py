@@ -30,6 +30,7 @@ import time
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from bson.json_util import dumps
+from typing import Optional
 
 
 # Load environment variables
