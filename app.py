@@ -772,15 +772,21 @@ def get_all_profiles():
     return profile_list
 
 @app.post("/store-email")
-def store_email(wallet_address: str = Form(...), email: str = Form(...)):
-    if not wallet_address or not email:
-        raise HTTPException(status_code=400, detail="Both wallet_address and email are required")
+def store_email(
+    email: str = Form(...),
+    wallet_address: Optional[str] = Form(None)
+):
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
 
     existing_email = email_collection.find_one({"email": email})
     if existing_email:
         raise HTTPException(status_code=409, detail="Email already exists")
 
-    email_data = {"wallet_address": wallet_address, "email": email}
+    email_data = {"email": email}
+    if wallet_address:
+        email_data["wallet_address"] = wallet_address
+
     email_collection.insert_one(email_data)
     return JSONResponse(content={"message": "Success"}, status_code=201)
 
