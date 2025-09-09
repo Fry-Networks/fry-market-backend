@@ -50,17 +50,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration
+# Configuration 
 engine_id = "stable-diffusion-v1-6"
 api_host = os.getenv('API_HOST', 'https://api.stability.ai')
 api_key = os.getenv('STABILITY_API_KEY')
 s3_bucket = os.getenv('S3_BUCKET')
 s3_folder = os.getenv('S3_FOLDER')
 openai_api_key = os.getenv('OPENAI_API_KEY')
+mongodb_uri = os.getenv('MONGODB_URI')  # Add this line
 app.secret_key = secrets.token_hex(16)
 
 # MongoDB connection
-client = pymongo.MongoClient("mongodb+srv://frysamuel:WY8umbCtmkr@frynetwork.l921m.mongodb.net/?retryWrites=true&w=majority&appName=frynetwork")
+client = pymongo.MongoClient(mongodb_uri)  # Use the environment variable
 db = client['Frynetwork']
 nft_collection = db['nft_collection']
 profile_settings_collection = db['profile_settings']
@@ -398,6 +399,7 @@ async def websocket_generate_images(websocket: WebSocket):
                 prompt = data.get("prompt", "A lighthouse on a cliff")
                 style = data.get("style", None)
                 num_images = data.get("num_images", 1)
+                collection_name = data.get("collection_name", "Default Collection")  # Get collection name
 
                 # Validate wallet address
                 if not wallet_address:
@@ -423,7 +425,7 @@ async def websocket_generate_images(websocket: WebSocket):
                         image_urls = generate_images(batch_count, prompt, style)
                         print(f"Generated image URLs for batch {batch_index + 1}: {image_urls}")
 
-                        for image_url in image_urls:
+                        for idx, image_url in enumerate(image_urls):
                             try:
                                 # Generate metadata for the image
                                 description = await generate_image_description(image_url)
@@ -443,10 +445,15 @@ async def websocket_generate_images(websocket: WebSocket):
                                     await websocket.send_json({"error": "Invalid description format returned"})
                                     continue
 
-                                # Create metadata
+                                # Create image name based on collection name and index
+                                image_index = batch_start + idx + 1
+                                image_name = f"{collection_name} #{image_index}"
+
+                                # Create metadata with collection-based naming
                                 metadata = {
                                     "wallet_address": wallet_address,
-                                    "name": description.get("name"),
+                                    "name": image_name,  # Use collection-based name
+                                    "collection_name": collection_name,  # Add collection name field
                                     "image": image_url,
                                     "extra": description.get("extra", {}),
                                     "standard": description.get("standard"),
@@ -497,7 +504,8 @@ async def websocket_generate_images(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
         await websocket.close()
-    
+
+
 @app.post("/upload-metadata")
 async def upload_metadata(metadata: dict):
     image_url = metadata.get("image")
