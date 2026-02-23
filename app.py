@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Header, Depends, Request , Body
+from fastapi import FastAPI, HTTPException, Header, Depends, Request, Body, WebSocket, File, UploadFile, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from fastapi_socketio import SocketManager
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 import base64
 import io
 import requests
@@ -9,28 +9,20 @@ import boto3
 import openai
 import json
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, HTTPException
 import os
 import pymongo
-from fastapi.responses import FileResponse
-from bson.objectid import ObjectId
+from bson import ObjectId
+from bson.json_util import dumps
 import datetime
 import secrets
 import jwt
-from web3 import Web3
-from functools import wraps
 import uuid
 import random
 import string
 import re
 from botocore.exceptions import ClientError
-from fastapi import File, UploadFile, Form
-from typing import List
+from typing import List, Optional
 import time
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from bson.json_util import dumps
-from typing import Optional
 
 
 # Load environment variables
@@ -59,7 +51,7 @@ s3_bucket = os.getenv('S3_BUCKET')
 s3_folder = os.getenv('S3_FOLDER')
 openai_api_key = os.getenv('OPENAI_API_KEY')
 mongodb_uri = os.getenv('MONGODB_URI')  # Add this line
-app.secret_key = secrets.token_hex(16)
+app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(16))
 
 # MongoDB connection
 client = pymongo.MongoClient(mongodb_uri)  # Use the environment variable
@@ -69,11 +61,17 @@ profile_settings_collection = db['profile_settings']
 email_collection = db['email']  # Create/Use the 'email' collection
 image_collection = db['images']  # Create/Use the 'images' collection
 
+# Additional MongoDB collections for marketplace features
+listing_collection = db['listings']       # NFT listings (fixed price / auction)
+bid_collection = db['bids']               # Auction bids
+transaction_collection = db['transactions']  # Transaction history
+
 # S3 setup
 s3_client = boto3.client(
         's3',
         aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.getenv('AWS_REGION', 'us-east-2')
     )
 # OpenAI setup
 openai.api_key = openai_api_key
@@ -120,43 +118,26 @@ async def get_token(request: Request):
     else:
         raise HTTPException(status_code=400, detail="Invalid wallet address")
 
-# Utility functions
-def token_required(f):
-    @wraps(f)
-    async def decorated(*args, x_access_token: str = Header(None), **kwargs):
-        if not x_access_token:
-            raise HTTPException(status_code=403, detail="Token is missing!")
+# Authentication dependency
+async def get_current_wallet(x_access_token: str = Header(None)) -> str:
+    """FastAPI dependency that validates JWT token and returns the wallet address."""
+    if not x_access_token:
+        raise HTTPException(status_code=403, detail="Token is missing!")
 
-        try:
-            data = jwt.decode(x_access_token, app.secret_key, algorithms=['HS256'])
-            current_wallet_address = data['wallet_address']
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=403, detail="Token has expired!")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=403, detail="Token is invalid!")
-
-        return await f(current_wallet_address, *args, **kwargs)
-
-    return decorated
+    try:
+        data = jwt.decode(x_access_token, app.secret_key, algorithms=['HS256'])
+        return data['wallet_address']
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="Token has expired!")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=403, detail="Token is invalid!")
 
 def generate_short_unique_id(length=5):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def upload_to_s3(file, bucket_name, folder_name="AI"):
-    s3_client = boto3.client(
-        's3',
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-        region_name='us-east-2'
-    )
-
-    folder_name = "AI"
     unique_id = generate_short_unique_id()
-    print(f"Unique ID: {unique_id}")
-    print(f"Folder Name: {folder_name}")
-
     object_name = f"{folder_name}/{unique_id}.png"
-    print(f"Object Name: {object_name}")
 
     try:
         if not hasattr(file, "read"):
@@ -196,11 +177,11 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                     "Authorization": f"Bearer {openai_api_key}"
                 },
                 json={
-                    "model": "gpt-image-1",  # or "dall-e-2" depending on your needs
+                    "model": "gpt-image-1",
                     "prompt": full_prompt,
                     "n": samples,
                     "size": "1024x1024",
-                    # "response_format": "b64_json"
+                    "response_format": "b64_json"
                 }
             )
 
@@ -306,9 +287,9 @@ def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
     return f"https://{s3_bucket}.s3.amazonaws.com/{s3_key}"
 
 @app.post('/generate-images')
-async def generate_images_route(request: Request):
+async def generate_images_route(request: Request, current_wallet: str = Depends(get_current_wallet)):
     data = await request.json()
-    wallet_address = data.get('wallet_address')
+    wallet_address = data.get('wallet_address', current_wallet)
     prompt = data.get('prompt', "A lighthouse on a cliff")
     style = data.get('style', None)
     num_images = data.get('num_images', 1)
@@ -324,43 +305,31 @@ async def generate_images_route(request: Request):
         image_responses = []
 
         for image_url in image_urls:
-            description = generate_image_description(image_url)
+            description = await generate_image_description(image_url)
 
-            if not description or not isinstance(description, str):
+            if not description or not isinstance(description, dict):
                 raise HTTPException(status_code=400, detail="Invalid image description generated.")
 
-            cleaned_description = re.sub(r'//|\\n', '', description)
-
-            try:
-                description_json = json.loads(cleaned_description)
-
-                metadata = {
-                    "wallet_address": wallet_address,
-                    "image": image_url,
-                    "name": description_json.get("name"),
-                    "extra": description_json.get("extra", {}),
-                    "standard": description_json.get("standard"),
-                    "properties": description_json.get("properties", {}),
-                    "description": description_json.get("description"),
-                    "image_mime_type": description_json.get("image_mime_type"),
-                    "extra_properties": description_json.get("extra_properties", {}),
-                    "prompt": prompt,
-                    "style": style,
-                }
-            except json.JSONDecodeError:
-                metadata = {
-                    "wallet_address": wallet_address,
-                    "image": image_url,
-                    "description": cleaned_description,
-                    "prompt": prompt,
-                    "style": style,
-                }
+            metadata = {
+                "wallet_address": wallet_address,
+                "image": image_url,
+                "name": description.get("name"),
+                "extra": description.get("extra", {}),
+                "standard": description.get("standard"),
+                "properties": description.get("properties", {}),
+                "description": description.get("description"),
+                "image_mime_type": description.get("image_mime_type"),
+                "extra_properties": description.get("extra_properties", {}),
+                "prompt": prompt,
+                "style": style,
+            }
 
             metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
             metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
 
-            # Save metadata to MongoDB
-            image_collection.insert_one(metadata)
+            # Save metadata to MongoDB (copy to avoid _id serialization issues)
+            metadata_to_store = metadata.copy()
+            image_collection.insert_one(metadata_to_store)
 
             image_responses.append({
                 "name": metadata.get("name"),
@@ -377,8 +346,6 @@ async def generate_images_route(request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-
-from bson import ObjectId
 
 @app.websocket("/ws")
 async def websocket_generate_images(websocket: WebSocket):
@@ -508,7 +475,7 @@ async def websocket_generate_images(websocket: WebSocket):
 
 
 @app.post("/upload-metadata")
-async def upload_metadata(metadata: dict):
+async def upload_metadata(metadata: dict, current_wallet: str = Depends(get_current_wallet)):
     image_url = metadata.get("image")
     if not image_url:
         raise HTTPException(status_code=400, detail="No image URL provided")
@@ -530,7 +497,7 @@ async def upload_metadata(metadata: dict):
     return {"url": json_url}
 
 @app.post("/upload-nft-image")
-async def upload_image(image: UploadFile = File(...)):
+async def upload_image(image: UploadFile = File(...), current_wallet: str = Depends(get_current_wallet)):
     unique_id = str(uuid.uuid4().int)[:4]
     image_file_name = f"{unique_id}.{image.filename.split('.')[-1]}"
 
@@ -548,7 +515,7 @@ async def upload_image(image: UploadFile = File(...)):
     return {"url": image_url}
     
 @app.post("/create-collection")
-async def create_collection(data: dict):
+async def create_collection(data: dict, current_wallet: str = Depends(get_current_wallet)):
     # Extract data from the incoming request
     collection_name = data.get("collection_name")
     collection_address = data.get("collection_address")
@@ -556,6 +523,7 @@ async def create_collection(data: dict):
     image_url = data.get("image_url", "")
     description = data.get("description", "")
     royalty = data.get("royalty", 0.0)
+    category = data.get("category", "")
 
     # Validate required fields
     if not collection_name or not collection_address or not wallet_address:
@@ -564,7 +532,7 @@ async def create_collection(data: dict):
     # Check if a collection with the same collection_address already exists for the same wallet_address
     existing_collection = nft_collection.find_one({
         "wallet_address": wallet_address,
-        "collection_address": collection_address  # Ensure uniqueness per wallet
+        "collection_address": collection_address
     })
 
     if existing_collection:
@@ -574,10 +542,14 @@ async def create_collection(data: dict):
     collection_data = {
         "collection_name": collection_name,
         "collection_address": collection_address,
-        "wallet_address": wallet_address,  # Link collection to wallet address
+        "wallet_address": wallet_address,
         "image_url": image_url,
         "description": description,
-        "royalty": royalty
+        "royalty": royalty,
+        "category": category,
+        "minted_nfts": [],
+        "listed_nfts": [],
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
     }
 
     # Insert collection data into the database
@@ -600,22 +572,30 @@ async def get_collections(wallet_address: str):
     return {"wallet_address": wallet_address, "collections": collections}
 
 @app.put("/update-collection/{collection_address}")
-async def update_collection(collection_address: str, data: dict):
+async def update_collection(collection_address: str, data: dict, current_wallet: str = Depends(get_current_wallet)):
     add_nfts = data.get("add_nfts", [])
     remove_nfts = data.get("remove_nfts", [])
+    update_fields = {}
+
+    # Allow updating collection metadata fields
+    for field in ["collection_name", "description", "image_url", "royalty", "category"]:
+        if field in data:
+            update_fields[field] = data[field]
 
     collection = nft_collection.find_one({"collection_address": collection_address})
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
 
-    listed_nfts = set(collection["listed_nfts"])
+    listed_nfts = set(collection.get("listed_nfts", []))
     listed_nfts.update(add_nfts)
     for nft in remove_nfts:
         listed_nfts.discard(nft)
 
+    update_fields["listed_nfts"] = list(listed_nfts)
+
     nft_collection.update_one(
         {"collection_address": collection_address},
-        {"$set": {"listed_nfts": list(listed_nfts)}}
+        {"$set": update_fields}
     )
 
     return {"message": "Collection updated"}
@@ -638,7 +618,7 @@ def get_collection_by_address(collection_address: str):
     return serialize_document(collection)
 
 @app.post("/upload-images")
-def upload_images(images: List[UploadFile] = File(...)):
+def upload_images(images: List[UploadFile] = File(...), current_wallet: str = Depends(get_current_wallet)):
     if not images:
         raise HTTPException(status_code=400, detail="No images provided")
 
@@ -659,6 +639,7 @@ def update_followers_following(
     wallet_address: str = Form(...),
     followers: List[str] = Form(default=[]),
     following: List[str] = Form(default=[]),
+    current_wallet: str = Depends(get_current_wallet),
 ):
     artist_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
     if not artist_profile:
@@ -676,6 +657,7 @@ def update_followers_following(
 @app.post("/profile-settings")
 @app.put("/profile-settings")
 def profile_settings(
+    current_wallet: str = Depends(get_current_wallet),
     wallet_address: str = Form(...),
     display_name: str = Form(None),
     bio: str = Form(None),
@@ -689,8 +671,8 @@ def profile_settings(
 ):
     existing_profile = profile_settings_collection.find_one({"wallet_address": wallet_address})
 
-    profile_data = {
-        "wallet_address": wallet_address,
+    # Build profile data - only include fields that are provided (not None)
+    all_fields = {
         "display_name": display_name,
         "bio": bio,
         "email": email,
@@ -703,11 +685,19 @@ def profile_settings(
     }
 
     if existing_profile:
-        profile_settings_collection.update_one(
-            {"wallet_address": wallet_address}, {"$set": profile_data}
-        )
+        # Only update fields that were actually provided
+        update_data = {k: v for k, v in all_fields.items() if v is not None}
+        if update_data:
+            profile_settings_collection.update_one(
+                {"wallet_address": wallet_address}, {"$set": update_data}
+            )
         return {"message": "Profile updated successfully"}
     else:
+        profile_data = {"wallet_address": wallet_address}
+        profile_data.update(all_fields)
+        # Initialize followers/following arrays for new profiles
+        profile_data["followers"] = []
+        profile_data["following"] = []
         profile_settings_collection.insert_one(profile_data)
         return JSONResponse(content={"message": "Profile created successfully"}, status_code=201)
 
@@ -802,7 +792,7 @@ def store_email(
 # Ehtisham Code Start
 
 @app.put("/update-collection-nft/{collection_address}")
-async def update_collection_nft(collection_address: str, payload: dict = Body(...)):
+async def update_collection_nft(collection_address: str, payload: dict = Body(...), current_wallet: str = Depends(get_current_wallet)):
     add_nfts = payload.get("add_nfts", [])
     print(collection_address)
     
@@ -878,19 +868,517 @@ async def get_collection_nfts(collection_id: str):
 @app.get("/collection-details-by-nft/{nft_id}")
 async def get_collection_details_by_nft(nft_id: str):
     # Find the collection document where minted_nfts contains the given nft_id
-    collection = nft_collection.find_one({"minted_nfts": int(nft_id)})
-    
+    # Try both string and ObjectId formats for compatibility
+    collection = nft_collection.find_one({"minted_nfts": nft_id})
+
+    if not collection:
+        # Fallback: try as ObjectId
+        try:
+            collection = nft_collection.find_one({"minted_nfts": ObjectId(nft_id)})
+        except Exception:
+            pass
+
     if not collection:
         raise HTTPException(status_code=404, detail="Collection not found")
-    
-    # Use dumps to serialize the document (handles ObjectId, dates, etc.)
+
     serialized = dumps(collection)
-    # Convert the JSON string to a Python dict before returning
     return JSONResponse(
         content=json.loads(serialized),
         status_code=200,
     )
 
+
+
+# ============================================================
+# NFT Marketplace Endpoints (per Tech Docs Sections 3.1-3.3)
+# ============================================================
+
+# --- NFT Listing (Fixed Price & Auction) - Tech Docs Section 3.2 ---
+
+@app.post("/list-nft")
+async def list_nft(data: dict, current_wallet: str = Depends(get_current_wallet)):
+    """List an NFT for sale (fixed price or auction)."""
+    nft_id = data.get("nft_id")
+    listing_type = data.get("listing_type", "fixed")  # "fixed" or "auction"
+    price = data.get("price")
+    currency = data.get("currency", "FRY")
+    duration_hours = data.get("duration_hours", 72)  # Default 72 hours for auctions
+    reserve_price = data.get("reserve_price")
+    category = data.get("category", "")
+
+    if not nft_id or price is None:
+        raise HTTPException(status_code=400, detail="nft_id and price are required")
+
+    if listing_type not in ("fixed", "auction"):
+        raise HTTPException(status_code=400, detail="listing_type must be 'fixed' or 'auction'")
+
+    if price <= 0:
+        raise HTTPException(status_code=400, detail="Price must be greater than 0")
+
+    # Verify the NFT exists
+    try:
+        nft = image_collection.find_one({"_id": ObjectId(nft_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid NFT ID format")
+
+    if not nft:
+        raise HTTPException(status_code=404, detail="NFT not found")
+
+    # Check the NFT belongs to the current wallet
+    if nft.get("wallet_address") != current_wallet:
+        raise HTTPException(status_code=403, detail="You can only list your own NFTs")
+
+    # Check if already listed
+    existing_listing = listing_collection.find_one({
+        "nft_id": nft_id,
+        "status": {"$in": ["active", "pending"]}
+    })
+    if existing_listing:
+        raise HTTPException(status_code=400, detail="NFT is already listed")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    listing_data = {
+        "nft_id": nft_id,
+        "seller_wallet": current_wallet,
+        "listing_type": listing_type,
+        "price": price,
+        "currency": currency,
+        "category": category,
+        "status": "active",
+        "created_at": now.isoformat(),
+    }
+
+    if listing_type == "auction":
+        end_time = now + datetime.timedelta(hours=duration_hours)
+        listing_data["end_time"] = end_time.isoformat()
+        listing_data["highest_bid"] = 0
+        listing_data["highest_bidder"] = None
+        if reserve_price is not None:
+            listing_data["reserve_price"] = reserve_price
+
+    result = listing_collection.insert_one(listing_data)
+    return {"message": "NFT listed successfully", "listing_id": str(result.inserted_id)}
+
+
+@app.get("/get-listing/{listing_id}")
+async def get_listing(listing_id: str):
+    """Get details of a specific listing."""
+    try:
+        listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid listing ID")
+
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    return JSONResponse(content=json.loads(dumps(listing)), status_code=200)
+
+
+@app.get("/get-active-listings")
+async def get_active_listings(
+    listing_type: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    seller: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Get all active NFT listings with optional filtering."""
+    query = {"status": "active"}
+    if listing_type:
+        query["listing_type"] = listing_type
+    if category:
+        query["category"] = category
+    if seller:
+        query["seller_wallet"] = seller
+
+    skip = (page - 1) * limit
+    total = listing_collection.count_documents(query)
+    listings = list(listing_collection.find(query).sort("created_at", -1).skip(skip).limit(limit))
+
+    return JSONResponse(content={
+        "listings": json.loads(dumps(listings)),
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit
+    }, status_code=200)
+
+
+@app.put("/cancel-listing/{listing_id}")
+async def cancel_listing(listing_id: str, current_wallet: str = Depends(get_current_wallet)):
+    """Cancel an active listing (seller only)."""
+    try:
+        listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid listing ID")
+
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if listing["seller_wallet"] != current_wallet:
+        raise HTTPException(status_code=403, detail="Only the seller can cancel this listing")
+
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail="Listing is not active")
+
+    listing_collection.update_one(
+        {"_id": ObjectId(listing_id)},
+        {"$set": {"status": "cancelled", "cancelled_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
+    )
+
+    return {"message": "Listing cancelled"}
+
+
+# --- Buy NFT - Tech Docs Section 3.2 ---
+
+@app.post("/buy-nft")
+async def buy_nft(data: dict, current_wallet: str = Depends(get_current_wallet)):
+    """Purchase an NFT at fixed price."""
+    listing_id = data.get("listing_id")
+
+    if not listing_id:
+        raise HTTPException(status_code=400, detail="listing_id is required")
+
+    try:
+        listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid listing ID")
+
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail="Listing is no longer active")
+
+    if listing["listing_type"] != "fixed":
+        raise HTTPException(status_code=400, detail="This listing is an auction - use place-bid instead")
+
+    if listing["seller_wallet"] == current_wallet:
+        raise HTTPException(status_code=400, detail="You cannot buy your own NFT")
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # Update listing status
+    listing_collection.update_one(
+        {"_id": ObjectId(listing_id)},
+        {"$set": {"status": "sold", "buyer_wallet": current_wallet, "sold_at": now}}
+    )
+
+    # Transfer NFT ownership in images collection
+    image_collection.update_one(
+        {"_id": ObjectId(listing["nft_id"])},
+        {"$set": {"wallet_address": current_wallet},
+         "$push": {"ownership_history": {
+             "from": listing["seller_wallet"],
+             "to": current_wallet,
+             "price": listing["price"],
+             "currency": listing["currency"],
+             "date": now
+         }}}
+    )
+
+    # Record transaction
+    transaction_data = {
+        "type": "purchase",
+        "listing_id": listing_id,
+        "nft_id": listing["nft_id"],
+        "seller_wallet": listing["seller_wallet"],
+        "buyer_wallet": current_wallet,
+        "price": listing["price"],
+        "currency": listing["currency"],
+        "timestamp": now,
+    }
+    transaction_collection.insert_one(transaction_data)
+
+    return {"message": "NFT purchased successfully", "nft_id": listing["nft_id"]}
+
+
+# --- Auction & Bidding - Tech Docs Section 3.2 ---
+
+@app.post("/place-bid")
+async def place_bid(data: dict, current_wallet: str = Depends(get_current_wallet)):
+    """Place a bid on an auction listing."""
+    listing_id = data.get("listing_id")
+    bid_amount = data.get("bid_amount")
+
+    if not listing_id or bid_amount is None:
+        raise HTTPException(status_code=400, detail="listing_id and bid_amount are required")
+
+    try:
+        listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid listing ID")
+
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if listing["listing_type"] != "auction":
+        raise HTTPException(status_code=400, detail="This listing is not an auction")
+
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail="Auction is no longer active")
+
+    if listing["seller_wallet"] == current_wallet:
+        raise HTTPException(status_code=400, detail="You cannot bid on your own auction")
+
+    # Check auction hasn't expired
+    end_time = datetime.datetime.fromisoformat(listing["end_time"])
+    if datetime.datetime.now(datetime.timezone.utc) > end_time:
+        raise HTTPException(status_code=400, detail="Auction has ended")
+
+    # Bid must be higher than current highest bid and starting price
+    min_bid = max(listing.get("highest_bid", 0), listing["price"])
+    if bid_amount <= min_bid:
+        raise HTTPException(status_code=400, detail=f"Bid must be higher than {min_bid}")
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    # Record the bid
+    bid_data = {
+        "listing_id": listing_id,
+        "nft_id": listing["nft_id"],
+        "bidder_wallet": current_wallet,
+        "bid_amount": bid_amount,
+        "timestamp": now,
+    }
+    bid_collection.insert_one(bid_data)
+
+    # Update listing with highest bid
+    listing_collection.update_one(
+        {"_id": ObjectId(listing_id)},
+        {"$set": {"highest_bid": bid_amount, "highest_bidder": current_wallet}}
+    )
+
+    return {"message": "Bid placed successfully", "bid_amount": bid_amount}
+
+
+@app.get("/get-bids/{listing_id}")
+async def get_bids(listing_id: str):
+    """Get all bids for a specific auction listing."""
+    bids = list(bid_collection.find({"listing_id": listing_id}).sort("bid_amount", -1))
+    return JSONResponse(content=json.loads(dumps(bids)), status_code=200)
+
+
+@app.post("/end-auction/{listing_id}")
+async def end_auction(listing_id: str, current_wallet: str = Depends(get_current_wallet)):
+    """End an auction and finalize the sale to the highest bidder."""
+    try:
+        listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid listing ID")
+
+    if not listing:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    if listing["seller_wallet"] != current_wallet:
+        raise HTTPException(status_code=403, detail="Only the seller can end this auction")
+
+    if listing["listing_type"] != "auction":
+        raise HTTPException(status_code=400, detail="This listing is not an auction")
+
+    if listing["status"] != "active":
+        raise HTTPException(status_code=400, detail="Auction is no longer active")
+
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    highest_bidder = listing.get("highest_bidder")
+    highest_bid = listing.get("highest_bid", 0)
+
+    # Check reserve price
+    reserve_price = listing.get("reserve_price", 0)
+    if highest_bid < reserve_price or not highest_bidder:
+        listing_collection.update_one(
+            {"_id": ObjectId(listing_id)},
+            {"$set": {"status": "expired", "ended_at": now}}
+        )
+        return {"message": "Auction ended with no qualifying bids", "status": "expired"}
+
+    # Transfer NFT to highest bidder
+    listing_collection.update_one(
+        {"_id": ObjectId(listing_id)},
+        {"$set": {"status": "sold", "buyer_wallet": highest_bidder, "sold_at": now}}
+    )
+
+    image_collection.update_one(
+        {"_id": ObjectId(listing["nft_id"])},
+        {"$set": {"wallet_address": highest_bidder},
+         "$push": {"ownership_history": {
+             "from": listing["seller_wallet"],
+             "to": highest_bidder,
+             "price": highest_bid,
+             "currency": listing.get("currency", "FRY"),
+             "date": now,
+             "type": "auction"
+         }}}
+    )
+
+    # Record transaction
+    transaction_data = {
+        "type": "auction_sale",
+        "listing_id": listing_id,
+        "nft_id": listing["nft_id"],
+        "seller_wallet": listing["seller_wallet"],
+        "buyer_wallet": highest_bidder,
+        "price": highest_bid,
+        "currency": listing.get("currency", "FRY"),
+        "timestamp": now,
+    }
+    transaction_collection.insert_one(transaction_data)
+
+    return {"message": "Auction completed", "winner": highest_bidder, "price": highest_bid}
+
+
+# --- Search & Filter - Tech Docs Section 3.2 ---
+
+@app.get("/search")
+async def search_nfts(
+    q: Optional[str] = Query(None, description="Search query for name or description"),
+    category: Optional[str] = Query(None),
+    collection: Optional[str] = Query(None, description="Collection name"),
+    creator: Optional[str] = Query(None, description="Creator wallet address"),
+    style: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Search and filter NFTs by various criteria (Tech Docs Section 3.2)."""
+    query = {}
+
+    if q:
+        query["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+        ]
+
+    if category:
+        # Search by category in the NFT's collection
+        matching_collections = list(nft_collection.find(
+            {"category": {"$regex": category, "$options": "i"}},
+            {"collection_name": 1}
+        ))
+        collection_names = [c["collection_name"] for c in matching_collections]
+        if collection_names:
+            query["collection_name"] = {"$in": collection_names}
+        else:
+            return {"results": [], "total": 0, "page": page, "pages": 0}
+
+    if collection:
+        query["collection_name"] = {"$regex": collection, "$options": "i"}
+
+    if creator:
+        query["wallet_address"] = creator
+
+    if style:
+        query["style"] = {"$regex": style, "$options": "i"}
+
+    skip = (page - 1) * limit
+    total = image_collection.count_documents(query)
+    results = list(image_collection.find(query).sort("_id", -1).skip(skip).limit(limit))
+
+    return JSONResponse(content={
+        "results": json.loads(dumps(results)),
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit
+    }, status_code=200)
+
+
+# --- Transaction History - Tech Docs Section 3.1 / 3.3 ---
+
+@app.get("/transaction-history/{wallet_address}")
+async def get_transaction_history(
+    wallet_address: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Get transaction history for a wallet address (Tech Docs Section 3.3)."""
+    query = {
+        "$or": [
+            {"seller_wallet": wallet_address},
+            {"buyer_wallet": wallet_address},
+        ]
+    }
+
+    skip = (page - 1) * limit
+    total = transaction_collection.count_documents(query)
+    transactions = list(
+        transaction_collection.find(query).sort("timestamp", -1).skip(skip).limit(limit)
+    )
+
+    return JSONResponse(content={
+        "transactions": json.loads(dumps(transactions)),
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit
+    }, status_code=200)
+
+
+# --- NFT Detail View with Ownership History - Tech Docs Section 3.2 ---
+
+@app.get("/nft/{nft_id}")
+async def get_nft_detail(nft_id: str):
+    """Get detailed NFT information including ownership history and metadata (Tech Docs Section 3.2)."""
+    try:
+        nft = image_collection.find_one({"_id": ObjectId(nft_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid NFT ID")
+
+    if not nft:
+        raise HTTPException(status_code=404, detail="NFT not found")
+
+    nft_data = json.loads(dumps(nft))
+
+    # Get active listing if any
+    active_listing = listing_collection.find_one({
+        "nft_id": nft_id,
+        "status": "active"
+    })
+    if active_listing:
+        nft_data["listing"] = json.loads(dumps(active_listing))
+
+    # Get transaction history for this NFT
+    transactions = list(
+        transaction_collection.find({"nft_id": nft_id}).sort("timestamp", -1)
+    )
+    nft_data["transactions"] = json.loads(dumps(transactions))
+
+    # Get the collection this NFT belongs to
+    collection = nft_collection.find_one({"minted_nfts": nft_id})
+    if collection:
+        nft_data["collection"] = json.loads(dumps(collection))
+
+    return JSONResponse(content=nft_data, status_code=200)
+
+
+@app.get("/nfts/{wallet_address}")
+async def get_nfts_by_wallet(
+    wallet_address: str,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Get all NFTs owned by a wallet address."""
+    query = {"wallet_address": wallet_address}
+    skip = (page - 1) * limit
+    total = image_collection.count_documents(query)
+    nfts = list(image_collection.find(query).sort("_id", -1).skip(skip).limit(limit))
+
+    return JSONResponse(content={
+        "nfts": json.loads(dumps(nfts)),
+        "total": total,
+        "page": page,
+        "pages": (total + limit - 1) // limit
+    }, status_code=200)
+
+
+# --- Fee Display Endpoint - Tech Docs Section 3.3 ---
+
+@app.get("/fees")
+async def get_fees():
+    """Get current marketplace fee structure (Tech Docs Section 3.3)."""
+    return {
+        "listing_fee": 0,
+        "transaction_fee_percent": 2.5,
+        "collection_generation_fee": 0,
+        "currency": "FRY",
+        "description": "Transaction fees are applied to successful sales."
+    }
 
 
 if __name__ == "__main__":
