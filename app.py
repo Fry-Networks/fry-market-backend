@@ -104,7 +104,10 @@ def generate_token(wallet_address: str) -> str:
 @app.post("/get-token")
 async def get_token(request: Request):
     """Generate a JWT token based on the provided wallet address."""
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     wallet_address = data.get('wallet_address')
 
@@ -187,12 +190,8 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                 raise Exception("Non-200 response: " + str(response.text))
             data = response.json()
             for i, image in enumerate(data["data"]):
-                image_idx = request_idx * images_per_request + i
-                image_name = f"image_{image_idx}"
-                s3_key = f"AI/{image_name}"
-
                 image_data = base64.b64decode(image["b64_json"])
-                image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, s3_key)
+                image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, "AI")
                 image_urls.append(image_url)
 
         except Exception as e:
@@ -480,7 +479,8 @@ async def upload_metadata(metadata: dict, current_wallet: str = Depends(get_curr
             ContentType="application/json"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"S3 metadata upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload metadata")
 
     json_url = f"https://{s3_bucket}.s3.amazonaws.com/{json_file_name}"
     return {"url": json_url}
@@ -488,7 +488,11 @@ async def upload_metadata(metadata: dict, current_wallet: str = Depends(get_curr
 @app.post("/upload-nft-image")
 async def upload_image(image: UploadFile = File(...), current_wallet: str = Depends(get_current_wallet)):
     unique_id = str(uuid.uuid4().int)[:4]
-    image_file_name = f"{unique_id}.{image.filename.split('.')[-1]}"
+    ext = image.filename.rsplit('.', 1)[-1] if '.' in (image.filename or '') else 'png'
+    allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}
+    if ext.lower() not in allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"File type '.{ext}' not allowed")
+    image_file_name = f"{unique_id}.{ext}"
 
     try:
         s3_client.put_object(
@@ -498,7 +502,8 @@ async def upload_image(image: UploadFile = File(...), current_wallet: str = Depe
             ContentType=image.content_type
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"S3 upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload image")
 
     image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_file_name}"
     return {"url": image_url}
@@ -767,6 +772,9 @@ def store_email(
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
 
+    if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+
     existing_email = email_collection.find_one({"email": email})
     if existing_email:
         raise HTTPException(status_code=409, detail="Email already exists")
@@ -798,7 +806,7 @@ async def update_collection_nft(collection_address: str, payload: dict = Body(..
     converted_ids = []
     for nft_id in add_nfts:
         try:
-            converted_ids.append(nft_id)
+            converted_ids.append(ObjectId(nft_id))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid NFT id: {nft_id}")
     
@@ -896,6 +904,9 @@ async def list_nft(data: dict, current_wallet: str = Depends(get_current_wallet)
 
     if not nft_id or price is None:
         raise HTTPException(status_code=400, detail="nft_id and price are required")
+
+    if not isinstance(price, (int, float)):
+        raise HTTPException(status_code=400, detail="price must be a number")
 
     if listing_type not in ("fixed", "auction"):
         raise HTTPException(status_code=400, detail="listing_type must be 'fixed' or 'auction'")
@@ -1091,6 +1102,9 @@ async def place_bid(data: dict, current_wallet: str = Depends(get_current_wallet
     if not listing_id or bid_amount is None:
         raise HTTPException(status_code=400, detail="listing_id and bid_amount are required")
 
+    if not isinstance(bid_amount, (int, float)) or bid_amount <= 0:
+        raise HTTPException(status_code=400, detail="bid_amount must be a positive number")
+
     try:
         listing = listing_collection.find_one({"_id": ObjectId(listing_id)})
     except Exception:
@@ -1251,6 +1265,8 @@ async def search_nfts(
         query["collection_name"] = {"$regex": collection, "$options": "i"}
 
     if creator:
+        if not isinstance(creator, str) or not creator.isalnum():
+            raise HTTPException(status_code=400, detail="Invalid creator wallet address")
         query["wallet_address"] = creator
 
     if style:
@@ -1327,8 +1343,13 @@ async def get_nft_detail(nft_id: str):
     )
     nft_data["transactions"] = json.loads(dumps(transactions))
 
-    # Get the collection this NFT belongs to
+    # Get the collection this NFT belongs to (try both string and ObjectId)
     collection = nft_collection.find_one({"minted_nfts": nft_id})
+    if not collection:
+        try:
+            collection = nft_collection.find_one({"minted_nfts": ObjectId(nft_id)})
+        except Exception:
+            pass
     if collection:
         nft_data["collection"] = json.loads(dumps(collection))
 
@@ -1371,4 +1392,5 @@ async def get_fees():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", reload=True, port=8000)
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    uvicorn.run("app:app", reload=debug, port=8000)

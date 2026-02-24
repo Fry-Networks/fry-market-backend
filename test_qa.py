@@ -861,6 +861,52 @@ def test_edge_cases():
         resp = client.post(f"/end-auction/{fixed_listing_id}", headers=headers)
         record("end auction on fixed listing returns 400", resp.status_code == 400, f"status={resp.status_code}")
 
+    # Test string price in listing
+    nft_result3 = image_collection.insert_one({
+        "wallet_address": VALID_WALLET,
+        "name": "String Price NFT",
+        "image": "https://test.com/str.png",
+    })
+    resp = client.post("/list-nft", json={
+        "nft_id": str(nft_result3.inserted_id),
+        "listing_type": "fixed",
+        "price": "not_a_number",
+    }, headers=headers)
+    record("string price returns 400", resp.status_code == 400, f"status={resp.status_code}")
+
+    # Test string bid amount
+    nft_result4 = image_collection.insert_one({
+        "wallet_address": VALID_WALLET,
+        "name": "Bid Test NFT",
+        "image": "https://test.com/bidstr.png",
+    })
+    resp = client.post("/list-nft", json={
+        "nft_id": str(nft_result4.inserted_id),
+        "listing_type": "auction",
+        "price": 50,
+    }, headers=headers)
+    if resp.status_code == 200:
+        auction_lid = resp.json()["listing_id"]
+        headers2 = auth_header(VALID_WALLET_2)
+        resp = client.post("/place-bid", json={
+            "listing_id": auction_lid,
+            "bid_amount": "not_a_number",
+        }, headers=headers2)
+        record("string bid_amount returns 400", resp.status_code == 400, f"status={resp.status_code}")
+
+    # Test invalid email format
+    resp = client.post("/store-email", data={"email": "not-an-email"})
+    record("invalid email format returns 400", resp.status_code == 400, f"status={resp.status_code}")
+
+    # Test invalid JSON body to get-token
+    resp = client.post("/get-token", content=b"not json", headers={"content-type": "application/json"})
+    record("invalid json body returns 400", resp.status_code == 400, f"status={resp.status_code}")
+
+    # Test disallowed file extension
+    fake_exe = io.BytesIO(b"fake exe")
+    resp = client.post("/upload-nft-image", files={"image": ("malware.exe", fake_exe, "application/octet-stream")}, headers=headers)
+    record("disallowed file extension returns 400", resp.status_code == 400, f"status={resp.status_code}")
+
     # Test pagination edge cases
     resp = client.get("/search?page=999&limit=10")
     record("search empty page", resp.status_code == 200, f"status={resp.status_code}")
