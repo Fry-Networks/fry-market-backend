@@ -23,6 +23,10 @@ import re
 from botocore.exceptions import ClientError
 from typing import List, Optional
 import time
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 # Load environment variables
@@ -102,16 +106,10 @@ async def get_token(request: Request):
     """Generate a JWT token based on the provided wallet address."""
     data = await request.json()
 
-    # Debugging: Print the received data
-    print("Received data:", data)
-
     wallet_address = data.get('wallet_address')
 
     if not wallet_address:
         raise HTTPException(status_code=400, detail="Wallet address is required")
-
-    # Debugging: Print the wallet address and validation result
-    print("Wallet address:", wallet_address)
     if validate_wallet_address(wallet_address):
         token = generate_token(wallet_address)
         return JSONResponse(content={"token": token}, status_code=200)
@@ -188,7 +186,6 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
             if response.status_code != 200:
                 raise Exception("Non-200 response: " + str(response.text))
             data = response.json()
-            print("data",data)
             for i, image in enumerate(data["data"]):
                 image_idx = request_idx * images_per_request + i
                 image_name = f"image_{image_idx}"
@@ -199,7 +196,7 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
                 image_urls.append(image_url)
 
         except Exception as e:
-            print(f"Error generating images: {str(e)}")
+            logger.error(f"Error generating images: {str(e)}")
             raise
 
     return image_urls
@@ -214,7 +211,6 @@ async def generate_image_description(image_url: str) -> dict:
     Returns:
         dict: The generated description in a structured JSON format.
     """
-    print(f"Generating description for image: {image_url}")
     prompt = f"""
         You are required to provide the response in a specific JSON format.
         The fields required are as follows:
@@ -248,8 +244,6 @@ async def generate_image_description(image_url: str) -> dict:
             "extra_properties": {{}}
         }}
     """
-    print(prompt)
-
     try:
         # Call OpenAI GPT-4 for generating description
         response = openai.chat.completions.create(
@@ -262,8 +256,6 @@ async def generate_image_description(image_url: str) -> dict:
         description = response.choices[0]
         description_content = description.message.content
 
-        print(f"Description content: {description_content}")
-
         # Clean the response content
         cleaned_description = re.sub(r'\\n', '', description_content)
         cleaned_description = re.sub(r'```json', '', cleaned_description)
@@ -274,11 +266,11 @@ async def generate_image_description(image_url: str) -> dict:
         return parsed_json  # Return the JSON as a dictionary
 
     except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}")
+        logger.error(f"Error parsing JSON from GPT: {e}")
         raise HTTPException(status_code=500, detail="Error parsing JSON response from GPT.")
 
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error in generate_image_description: {e}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
     
 def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
@@ -355,7 +347,6 @@ async def websocket_generate_images(websocket: WebSocket):
             try:
                 # Receive data from WebSocket
                 data = await websocket.receive_json()
-                print(f"Received data: {data}")
 
                 # Ensure data is a dictionary
                 if not isinstance(data, dict):
@@ -391,13 +382,11 @@ async def websocket_generate_images(websocket: WebSocket):
                     try:
                         # Generate image URLs
                         image_urls = generate_images(batch_count, prompt, style)
-                        print(f"Generated image URLs for batch {batch_index + 1}: {image_urls}")
 
                         for idx, image_url in enumerate(image_urls):
                             try:
                                 # Generate metadata for the image
                                 description = await generate_image_description(image_url)
-                                print(f"Generated description: {description}")
 
                                 # Ensure description is a parsed dictionary
                                 if isinstance(description, str):
@@ -446,7 +435,7 @@ async def websocket_generate_images(websocket: WebSocket):
 
                             except Exception as e:
                                 error_message = f"Failed to process image: {str(e)}"
-                                print(error_message)
+                                logger.error(error_message)
                                 await websocket.send_text(json.dumps({"error": error_message}))
 
                     except Exception as e:
@@ -455,7 +444,7 @@ async def websocket_generate_images(websocket: WebSocket):
                             error_message = f"Batch {batch_index + 1} flagged by content moderation: {str(e)}"
                         else:
                             error_message = f"Failed to process batch {batch_index + 1}: {str(e)}"
-                        print(error_message)
+                        logger.error(error_message)
                         await websocket.send_text(json.dumps({"error": error_message}))
 
                 # Once all batches are processed, send a summary message
@@ -470,7 +459,7 @@ async def websocket_generate_images(websocket: WebSocket):
                 continue
 
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
         await websocket.close()
 
 
@@ -794,7 +783,6 @@ def store_email(
 @app.put("/update-collection-nft/{collection_address}")
 async def update_collection_nft(collection_address: str, payload: dict = Body(...), current_wallet: str = Depends(get_current_wallet)):
     add_nfts = payload.get("add_nfts", [])
-    print(collection_address)
     
     # Convert collection_address to ObjectId
     try:
