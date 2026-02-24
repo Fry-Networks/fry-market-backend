@@ -2,7 +2,6 @@ fastapi
 uvicorn
 fastapi-socketio
 requests
-boto3
 openai
 python-dotenv
 pymongo
@@ -11,4 +10,3 @@ web3
 jinja2
 python-jwt
 pydantic
-botocore

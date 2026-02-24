@@ -1,15 +1,16 @@
 from fastapi import FastAPI, HTTPException, Header, Depends, Request, Body, WebSocket, File, UploadFile, Form, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import base64
 import io
 import requests
-import boto3
 import openai
 import json
 from dotenv import load_dotenv
 import os
+from pathlib import Path
 import pymongo
 from bson import ObjectId
 from bson.json_util import dumps
@@ -20,7 +21,7 @@ import uuid
 import random
 import string
 import re
-from botocore.exceptions import ClientError
+import shutil
 from typing import List, Optional
 import time
 import logging
@@ -47,15 +48,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configuration 
+# Configuration
 engine_id = "stable-diffusion-v1-6"
 api_host = os.getenv('API_HOST', 'https://api.stability.ai')
 api_key = os.getenv('STABILITY_API_KEY')
-s3_bucket = os.getenv('S3_BUCKET')
-s3_folder = os.getenv('S3_FOLDER')
 openai_api_key = os.getenv('OPENAI_API_KEY')
-mongodb_uri = os.getenv('MONGODB_URI')  # Add this line
+mongodb_uri = os.getenv('MONGODB_URI')
 app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(16))
+
+# Local file storage configuration
+UPLOAD_DIR = Path(os.getenv('UPLOAD_DIR', './uploads'))
+UPLOAD_BASE_URL = os.getenv('UPLOAD_BASE_URL', '')  # e.g. "https://yourdomain.com" for production
 
 # MongoDB connection
 client = pymongo.MongoClient(mongodb_uri)  # Use the environment variable
@@ -70,13 +73,14 @@ listing_collection = db['listings']       # NFT listings (fixed price / auction)
 bid_collection = db['bids']               # Auction bids
 transaction_collection = db['transactions']  # Transaction history
 
-# S3 setup
-s3_client = boto3.client(
-        's3',
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-        region_name=os.getenv('AWS_REGION', 'us-east-2')
-    )
+# Local storage setup - create upload directories
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+(UPLOAD_DIR / "AI").mkdir(exist_ok=True)
+(UPLOAD_DIR / "manual_nfts").mkdir(exist_ok=True)
+
+# Serve uploaded files as static assets
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
+
 # OpenAI setup
 openai.api_key = openai_api_key
 
@@ -136,28 +140,27 @@ async def get_current_wallet(x_access_token: str = Header(None)) -> str:
 def generate_short_unique_id(length=5):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-def upload_to_s3(file, bucket_name, folder_name="AI"):
+def save_file(file, folder_name="AI", extension="png"):
+    """Save a file to local storage and return its URL."""
     unique_id = generate_short_unique_id()
-    object_name = f"{folder_name}/{unique_id}.png"
+    object_name = f"{folder_name}/{unique_id}.{extension}"
+    file_path = UPLOAD_DIR / object_name
 
     try:
         if not hasattr(file, "read"):
             raise ValueError("Invalid file object")
 
-        s3_client.upload_fileobj(
-            file,
-            bucket_name,
-            object_name,
-            ExtraArgs={"ContentType": "image/png"}
-        )
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(file.read())
 
-        file_url = f"https://{bucket_name}.s3.amazonaws.com/{object_name}"
+        file_url = f"{UPLOAD_BASE_URL}/uploads/{object_name}"
         return file_url
 
     except ValueError as ve:
         raise Exception(f"Invalid file: {ve}")
     except Exception as e:
-        raise Exception(f"Failed to upload file: {str(e)}")
+        raise Exception(f"Failed to save file: {str(e)}")
 
 def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=None):
     image_urls = []
@@ -191,7 +194,7 @@ def generate_images(num_images, text_prompt="A lighthouse on a cliff", style=Non
             data = response.json()
             for i, image in enumerate(data["data"]):
                 image_data = base64.b64decode(image["b64_json"])
-                image_url = upload_to_s3(io.BytesIO(image_data), s3_bucket, "AI")
+                image_url = save_file(io.BytesIO(image_data), "AI")
                 image_urls.append(image_url)
 
         except Exception as e:
@@ -272,10 +275,13 @@ async def generate_image_description(image_url: str) -> dict:
         logger.error(f"Unexpected error in generate_image_description: {e}")
         raise HTTPException(status_code=500, detail="An unexpected error occurred.")
     
-def upload_metadata_to_s3(metadata, s3_bucket, s3_key):
-    s3_client = boto3.client('s3')
-    s3_client.put_object(Bucket=s3_bucket, Key=s3_key, Body=json.dumps(metadata), ContentType='application/json')
-    return f"https://{s3_bucket}.s3.amazonaws.com/{s3_key}"
+def save_metadata(metadata, file_key):
+    """Save metadata JSON to local storage and return its URL."""
+    file_path = UPLOAD_DIR / file_key
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "w") as f:
+        json.dump(metadata, f)
+    return f"{UPLOAD_BASE_URL}/uploads/{file_key}"
 
 @app.post('/generate-images')
 async def generate_images_route(request: Request, current_wallet: str = Depends(get_current_wallet)):
@@ -315,8 +321,8 @@ async def generate_images_route(request: Request, current_wallet: str = Depends(
                 "style": style,
             }
 
-            metadata_s3_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
-            metadata_url = upload_metadata_to_s3(metadata, s3_bucket, metadata_s3_key)
+            metadata_key = f"AI/{image_url.split('/')[-1].split('.')[0]}.json"
+            metadata_url = save_metadata(metadata, metadata_key)
 
             # Save metadata to MongoDB (copy to avoid _id serialization issues)
             metadata_to_store = metadata.copy()
@@ -472,17 +478,14 @@ async def upload_metadata(metadata: dict, current_wallet: str = Depends(get_curr
     json_file_name = image_filename.rsplit(".", 1)[0] + ".json"
 
     try:
-        s3_client.put_object(
-            Bucket=s3_bucket,
-            Key=json_file_name,
-            Body=json.dumps(metadata),
-            ContentType="application/json"
-        )
+        file_path = UPLOAD_DIR / json_file_name
+        with open(file_path, "w") as f:
+            json.dump(metadata, f)
     except Exception as e:
-        logger.error(f"S3 metadata upload failed: {e}")
+        logger.error(f"Metadata save failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload metadata")
 
-    json_url = f"https://{s3_bucket}.s3.amazonaws.com/{json_file_name}"
+    json_url = f"{UPLOAD_BASE_URL}/uploads/{json_file_name}"
     return {"url": json_url}
 
 @app.post("/upload-nft-image")
@@ -495,17 +498,14 @@ async def upload_image(image: UploadFile = File(...), current_wallet: str = Depe
     image_file_name = f"{unique_id}.{ext}"
 
     try:
-        s3_client.put_object(
-            Bucket=s3_bucket,
-            Key=image_file_name,
-            Body=image.file.read(),
-            ContentType=image.content_type
-        )
+        file_path = UPLOAD_DIR / image_file_name
+        with open(file_path, "wb") as f:
+            f.write(image.file.read())
     except Exception as e:
-        logger.error(f"S3 upload failed: {e}")
+        logger.error(f"File save failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to upload image")
 
-    image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_file_name}"
+    image_url = f"{UPLOAD_BASE_URL}/uploads/{image_file_name}"
     return {"url": image_url}
     
 @app.post("/create-collection")
@@ -619,14 +619,18 @@ def upload_images(images: List[UploadFile] = File(...), current_wallet: str = De
     try:
         image_urls = []
         for image_file in images:
-            image_name = f"manual_nfts/{image_file.filename}"
-            s3_client.upload_fileobj(image_file.file, s3_bucket, image_name)
-            image_url = f"https://{s3_bucket}.s3.amazonaws.com/{image_name}"
+            relative_path = f"manual_nfts/{image_file.filename}"
+            file_path = UPLOAD_DIR / relative_path
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, "wb") as f:
+                shutil.copyfileobj(image_file.file, f)
+            image_url = f"{UPLOAD_BASE_URL}/uploads/{relative_path}"
             image_urls.append(image_url)
 
         return {"image_urls": image_urls}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"File upload failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to upload images")
 
 @app.post("/update-followers-following")
 def update_followers_following(

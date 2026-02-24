@@ -1,23 +1,25 @@
 """
 Comprehensive QA test suite for fry-market-backend.
-Uses mocked MongoDB, S3, and OpenAI to test all endpoints.
+Uses mocked MongoDB and local filesystem storage to test all endpoints.
 """
 import os
 import sys
 import json
 import datetime
 import io
+import tempfile
+import shutil
+
+# Create a temporary upload directory for tests
+_test_upload_dir = tempfile.mkdtemp(prefix="fry_test_uploads_")
 
 # Set env vars BEFORE importing app
 os.environ["STABILITY_API_KEY"] = "test-key"
-os.environ["AWS_ACCESS_KEY_ID"] = "test-access-key"
-os.environ["AWS_SECRET_ACCESS_KEY"] = "test-secret-key"
-os.environ["S3_BUCKET"] = "test-bucket"
-os.environ["S3_FOLDER"] = "test-folder"
 os.environ["OPENAI_API_KEY"] = "test-openai-key"
 os.environ["MONGODB_URI"] = "mongomock://localhost"
 os.environ["SECRET_KEY"] = "test-secret-key-for-jwt"
-os.environ["AWS_REGION"] = "us-east-2"
+os.environ["UPLOAD_DIR"] = _test_upload_dir
+os.environ["UPLOAD_BASE_URL"] = ""
 
 # Patch pymongo to use mongomock BEFORE app import
 import mongomock
@@ -26,13 +28,7 @@ import unittest.mock as mock
 # Patch pymongo.MongoClient with mongomock
 mock_client = mongomock.MongoClient()
 with mock.patch("pymongo.MongoClient", return_value=mock_client):
-    # Patch boto3 S3 client
-    mock_s3 = mock.MagicMock()
-    mock_s3.upload_fileobj = mock.MagicMock(return_value=None)
-    mock_s3.put_object = mock.MagicMock(return_value=None)
-
-    with mock.patch("boto3.client", return_value=mock_s3):
-        import app as app_module
+    import app as app_module
 
 from fastapi.testclient import TestClient
 
@@ -56,7 +52,6 @@ app_module.image_collection = image_collection
 app_module.listing_collection = listing_collection
 app_module.bid_collection = bid_collection
 app_module.transaction_collection = transaction_collection
-app_module.s3_client = mock_s3
 
 # ============================================================
 # Test Helpers
@@ -757,6 +752,12 @@ def test_utility():
     fake_image = io.BytesIO(b"fake image data")
     resp = client.post("/upload-nft-image", files={"image": ("test.png", fake_image, "image/png")}, headers=headers)
     record("upload nft image", resp.status_code == 200, f"status={resp.status_code}, body={resp.text}")
+    if resp.status_code == 200:
+        url = resp.json()["url"]
+        record("upload returns local url", "/uploads/" in url, f"url={url}")
+        # Verify file was actually saved to disk
+        local_path = os.path.join(_test_upload_dir, url.split("/uploads/")[-1])
+        record("uploaded file exists on disk", os.path.exists(local_path), f"path={local_path}")
 
     # Test 9g: Upload metadata (with auth)
     resp = client.post("/upload-metadata", json={
@@ -944,4 +945,8 @@ if __name__ == "__main__":
             print(f"  - {issue['test']}: {issue['detail']}")
 
     print(f"\nTotal: {len(PASSED) + len(ISSUES)} tests")
+
+    # Clean up temporary upload directory
+    shutil.rmtree(_test_upload_dir, ignore_errors=True)
+
     sys.exit(1 if ISSUES else 0)
