@@ -72,6 +72,7 @@ image_collection = db['images']  # Create/Use the 'images' collection
 listing_collection = db['listings']       # NFT listings (fixed price / auction)
 bid_collection = db['bids']               # Auction bids
 transaction_collection = db['transactions']  # Transaction history
+feeconfig_collection = db['feeconfig']    # Fee configuration (singleton per chainId)
 
 # Local storage setup - create upload directories
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -1392,6 +1393,70 @@ async def get_fees():
         "currency": "FRY",
         "description": "Transaction fees are applied to successful sales."
     }
+
+
+# --- Fee Configuration (dynamic, stored in MongoDB) ---
+
+FEECONFIG_DEFAULTS = {
+    "chainId": "algorand-mainnet",
+    "listingFeePercent": 0,
+    "transactionFeePercent": 2.5,
+    "imageGenFeeUsd": 0.17,
+    "collectionCreationFeePercent": 0,
+    "primaryFeeBps": 300,
+    "secondaryFeeBps": 100,
+    "feeRecipient": "ATPVJYGEGP5H6GCZ4T6CG4PK7LH5OMWXHLXZHDPGO7RO6T3EHWTF6UUY6E",
+    "feeRouterAppId": 3509411111,
+    "feeRouterAddr": "AM53XSHRSSSZMNFAMKVAJFXHPMIYYUUBOVCODJ2LQY3D27CVXAHAPIXYXQ",
+    "revShareStakers": 60,
+    "revShareTreasury": 25,
+    "revSharePoolCreator": 10,
+    "revShareCompound": 5,
+}
+
+
+@app.get("/feeconfig")
+async def get_feeconfig(chain_id: str = Query(default="algorand-mainnet")):
+    """Get marketplace fee configuration. Returns singleton config for the given chain."""
+    config = feeconfig_collection.find_one({"chainId": chain_id}, {"_id": 0})
+    if not config:
+        config = {**FEECONFIG_DEFAULTS, "chainId": chain_id}
+        feeconfig_collection.insert_one({**config})
+        config.pop("_id", None)
+    return {"success": True, "data": config}
+
+
+@app.put("/feeconfig")
+async def update_feeconfig(request: Request):
+    """Update marketplace fee configuration (admin only)."""
+    body = await request.json()
+    chain_id = body.pop("chainId", "algorand-mainnet")
+
+    # Validate revShare sum if any revShare field is being updated
+    rev_keys = ["revShareStakers", "revShareTreasury", "revSharePoolCreator", "revShareCompound"]
+    has_rev_update = any(k in body for k in rev_keys)
+    if has_rev_update:
+        existing = feeconfig_collection.find_one({"chainId": chain_id}) or FEECONFIG_DEFAULTS
+        rev_sum = sum(body.get(k, existing.get(k, 0)) for k in rev_keys)
+        if rev_sum != 100:
+            raise HTTPException(status_code=400, detail=f"Revenue share must sum to 100, got {rev_sum}")
+
+    # Only allow known fields
+    allowed_fields = set(FEECONFIG_DEFAULTS.keys()) - {"chainId"}
+    updates = {k: v for k, v in body.items() if k in allowed_fields}
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    updates["updatedAt"] = datetime.datetime.utcnow().isoformat()
+
+    result = feeconfig_collection.update_one(
+        {"chainId": chain_id},
+        {"$set": updates},
+        upsert=True,
+    )
+    config = feeconfig_collection.find_one({"chainId": chain_id}, {"_id": 0})
+    return {"success": True, "message": "Fee config updated", "data": config}
 
 
 if __name__ == "__main__":
