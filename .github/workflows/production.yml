@@ -1,5 +1,8 @@
 name: Deploy via Self-Hosted Runner
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
