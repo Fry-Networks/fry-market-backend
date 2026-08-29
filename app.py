@@ -40,10 +40,13 @@ app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 # CORS configuration
+# Auth on this API is via the x-access-token header, not cookies, so
+# allow_credentials is not needed and must stay False when allow_origins is "*"
+# (combining a wildcard origin with credentialed requests defeats CORS entirely).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
