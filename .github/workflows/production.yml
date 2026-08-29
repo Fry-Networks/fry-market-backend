@@ -41,11 +41,6 @@ jobs:
     needs: deploy
 
     steps:
-      - name: Debug Whoami + Sudo Permissions
-        run: |
-          echo "Running as: $(whoami)"
-          sudo -l
-
       - name: Reload Nginx via Script
         run: |
           echo "Testing and restarting nginx via root-owned script..."
